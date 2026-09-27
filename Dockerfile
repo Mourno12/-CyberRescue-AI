@@ -21,6 +21,8 @@ COPY shared/ ./shared/
 COPY agents/ ./agents/
 COPY injector/ ./injector/
 COPY exporter/ ./exporter/
+# CyberRescue AI extension: the Core the Commander's action gate consults.
+COPY cyberrescue/ ./cyberrescue/
 
 RUN uv pip install --system -e . --no-cache
 

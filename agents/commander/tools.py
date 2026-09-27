@@ -30,8 +30,33 @@ def _actions_log_path() -> Path:
     return Path(os.getenv("ACTIONS_LOG_PATH", str(REPO_ROOT / "actions_log.jsonl")))
 
 
+def _cyberrescue_gate(action: str, details: dict[str, Any]) -> dict[str, Any] | None:
+    """CyberRescue AI extension (Phase 1b): ask the CyberRescue Core first.
+
+    ``CYBERRESCUE_GATE_MODE`` = ``shadow`` (default) logs the Core's policy
+    decision and never changes what this tool does; ``enforce`` executes only
+    what the Core authorizes. See ``cyberrescue/core/gate.py``. Imported lazily
+    so WarRoom still runs without the ``cyberrescue`` package; in enforce mode
+    a missing Core fails closed.
+    """
+    try:
+        from cyberrescue.core.gate import check_commander_action
+    except ImportError as e:
+        if os.getenv("CYBERRESCUE_GATE_MODE", "").strip().lower() == "enforce":
+            return {"proceed": False, "outcome": None, "reason":
+                    f"CyberRescue Core unavailable in enforce mode ({e})"}
+        return None
+    return check_commander_action(action, details)
+
+
 def _record_action(action: str, **details: Any) -> dict[str, Any]:
     """Append one action record to the log and return the confirmation."""
+    gate = _cyberrescue_gate(action, details)
+    if gate is not None and not gate.get("proceed", False):
+        return {"status": "blocked_by_policy", "action": action, **details,
+                "policy_outcome": gate.get("outcome"), "reason_blocked": gate.get("reason"),
+                "note": "NOT executed: the CyberRescue Core did not authorize this action. "
+                        "Obtain the required sign-offs / human approval, then retry."}
     record = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "actor": "commander",

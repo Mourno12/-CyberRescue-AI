@@ -24,12 +24,19 @@ def test_core_imports_no_band_sdk_or_llm_clients():
 
 
 def test_warroom_code_does_not_depend_on_cyberrescue():
+    # Phase 1b: exactly one sanctioned integration point — the Commander's
+    # action gate — and it imports the Core lazily inside a function.
+    allowed = {str(Path("agents") / "commander" / "tools.py")}
     offenders = []
     for folder in ("agents", "shared", "scripts", "injector", "exporter", "quickstart"):
         for py in (REPO / folder).rglob("*.py"):
             if "cyberrescue" in py.read_text(encoding="utf-8", errors="ignore"):
                 offenders.append(str(py.relative_to(REPO)))
-    assert offenders == []
+    assert set(offenders) <= allowed, offenders
+    src = (REPO / "agents" / "commander" / "tools.py").read_text(encoding="utf-8")
+    top_level = [ln for ln in src.splitlines()
+                 if ln.startswith(("import ", "from ")) and "cyberrescue" in ln]
+    assert top_level == []
 
 
 def test_db_path_comes_from_env(monkeypatch, tmp_path):
