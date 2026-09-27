@@ -10,6 +10,7 @@ import pytest
 from cyberrescue.core.cli import main
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cyberrescue" / "inc_c_transcript.json"
+EVIDENCE = Path(__file__).resolve().parent / "fixtures" / "cyberrescue" / "evidence_sample.jsonl"
 
 
 @pytest.fixture
@@ -80,3 +81,40 @@ def test_cli_end_to_end_gate(capsys, dbp, tmp_path):
     code, out = _run(capsys, "--db", dbp, "show", "--incident", "INC-C")
     assert "wipe_host" in out and "authorized" in out
     assert _run(capsys, "--db", dbp, "verify", "--incident", "INC-C")[0] == 0
+
+
+def test_cli_evidence_ingest_list_and_tamper_detection(capsys, dbp):
+    from cyberrescue.core.band_import import open_legacy_incident
+    from cyberrescue.core.service import CoreService
+    svc = CoreService.open(dbp)
+    open_legacy_incident(svc, "INC-C")
+    svc.conn.close()
+
+    code, out = _run(capsys, "--db", dbp, "register-actor", "--kind", "agent",
+                     "--role", "threat_intel", "--ref", "band:ti")
+    agent = re.search(r"actor (\w+)", out).group(1)
+    code, out = _run(capsys, "--db", dbp, "ingest-evidence", str(EVIDENCE),
+                     "--incident", "INC-C", "--collector", agent)
+    assert code == 2 and "may not submit evidence" in out           # agents cannot
+
+    code, out = _run(capsys, "--db", dbp, "register-actor", "--kind", "system",
+                     "--role", "collector", "--name", "synthetic collector")
+    col = re.search(r"actor (\w+)", out).group(1)
+    ingest = ("--db", dbp, "ingest-evidence", str(EVIDENCE), "--incident", "INC-C",
+              "--collector", col)
+    code, out = _run(capsys, *ingest)
+    assert code == 0 and "ingested 4 evidence record(s), 0 duplicate(s)" in out
+    assert "ingested 0 evidence record(s), 4 duplicate(s)" in _run(capsys, *ingest)[1]
+
+    code, out = _run(capsys, "--db", dbp, "evidence", "--incident", "INC-C", "--kind", "network")
+    assert code == 0 and "tls_connect" in out and "1 evidence record(s)" in out
+    code, out = _run(capsys, "--db", dbp, "verify")
+    assert code == 0 and "evidence INC-C-2026-0042: OK (4 records)" in out
+
+    conn = sqlite3.connect(dbp)
+    conn.execute("DROP TRIGGER evidence_no_update")
+    conn.execute("UPDATE evidence SET raw = 'benign' WHERE kind = 'log'")
+    conn.commit()
+    conn.close()
+    code, out = _run(capsys, "--db", dbp, "verify", "--incident", "INC-C")
+    assert code == 1 and "evidence INC-C-2026-0042: TAMPERED" in out

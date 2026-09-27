@@ -9,6 +9,10 @@
     python -m cyberrescue.core approve --incident INC-C --action wipe_host \
         --asset srv-db-01 --approver <actor-id> --reason "..." [--override-hold] \
         [--override-veto] [--deny] [--ttl 60]
+    python -m cyberrescue.core register-actor --kind system --role collector --name "syn"
+    python -m cyberrescue.core ingest-evidence events.jsonl --incident INC-C \
+        --collector <actor-id>
+    python -m cyberrescue.core evidence --incident INC-C [--kind network] [--host srv-db-01]
     python -m cyberrescue.core verify [--incident INC-C]
     python -m cyberrescue.core show --incident INC-C
 
@@ -24,6 +28,7 @@ import sys
 
 from cyberrescue.core import db
 from cyberrescue.core.band_import import Roster, import_band_context
+from cyberrescue.core.evidence import load_envelopes_jsonl
 from cyberrescue.core.models import ApprovalDecision
 from cyberrescue.core.service import ApprovalError, CoreError, CoreService
 
@@ -97,7 +102,38 @@ def _cmd_verify(svc, args) -> int:
         for e in res.errors:
             print(f"  - {e}")
         ok &= res.ok
+    # Evidence: recompute both hashes and cross-check against the audit trail.
+    incidents = ([_incident(svc, args.incident)] if args.incident else
+                 [r[0] for r in svc.conn.execute(
+                     "SELECT DISTINCT incident_id FROM audit_events WHERE event_type = ? "
+                     "ORDER BY incident_id", ("EVIDENCE_INGESTED",))])
+    for iid in incidents:
+        res = svc.verify_evidence(iid)
+        if res.checked or res.errors:
+            print(f"[core] evidence {iid}: {'OK' if res.ok else 'TAMPERED'} "
+                  f"({res.checked} records)")
+            for e in res.errors:
+                print(f"  - {e}")
+            ok &= res.ok
     return 0 if ok else 1
+
+
+def _cmd_ingest_evidence(svc, args) -> int:
+    envelopes = load_envelopes_jsonl(args.file)
+    rep = svc.ingest_evidence_batch(args.incident, envelopes, collector_id=args.collector,
+                                    source="cli")
+    print(f"[core] {rep.incident_id}: ingested {len(rep.ingested)} evidence record(s), "
+          f"{len(rep.duplicates)} duplicate(s)")
+    return 0
+
+
+def _cmd_evidence(svc, args) -> int:
+    records = svc.list_evidence(args.incident, kind=args.kind, host=args.host)
+    for r in records:
+        print(f"{r.id}  {r.observed_at}  {r.kind.value:<8} {r.host or '-':<14} "
+              f"{r.event_type:<16} {r.provenance.value}  sha256={r.content_sha256[:12]}")
+    print(f"[core] {len(records)} evidence record(s)")
+    return 0
 
 
 def _cmd_show(svc, args) -> int:
@@ -112,6 +148,7 @@ def _cmd_show(svc, args) -> int:
         print(f"  veto: {v.action or 'ALL tier-3'} ({v.regulation})")
     for r in svc.store.action_requests(iid):
         print(f"  action: {r.action:<20} {r.asset_id or '-':<12} {r.status.value}")
+    print(f"  evidence records: {len(svc.list_evidence(iid))}")
     print(f"  audit events: {len(svc.audit.events(iid))}")
     return 0
 
@@ -126,8 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="create/upgrade the database").set_defaults(fn=_cmd_init)
     sub.add_parser("seed-assets", help="load the mock asset inventory").set_defaults(fn=_cmd_seed)
 
-    r = sub.add_parser("register-actor", help="register an agent or human")
-    r.add_argument("--kind", choices=["agent", "human"], required=True)
+    r = sub.add_parser("register-actor", help="register an agent, human or system collector")
+    r.add_argument("--kind", choices=["agent", "human", "system"], required=True)
     r.add_argument("--role", required=True)
     r.add_argument("--name", default="")
     r.add_argument("--ref", default=None, help="external ref, e.g. band:<sender_id>")
@@ -159,7 +196,21 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--ttl", type=int, default=None, help="minutes (default from policy config)")
     a.set_defaults(fn=_cmd_approve)
 
-    v = sub.add_parser("verify", help="verify audit hash chains")
+    e = sub.add_parser("ingest-evidence", help="ingest evidence envelopes (JSONL, "
+                       "all-or-nothing)")
+    e.add_argument("file")
+    e.add_argument("--incident", required=True)
+    e.add_argument("--collector", required=True,
+                   help="registered SYSTEM collector or human operator actor id")
+    e.set_defaults(fn=_cmd_ingest_evidence)
+
+    ev = sub.add_parser("evidence", help="list an incident's evidence")
+    ev.add_argument("--incident", required=True)
+    ev.add_argument("--kind", default=None)
+    ev.add_argument("--host", default=None)
+    ev.set_defaults(fn=_cmd_evidence)
+
+    v = sub.add_parser("verify", help="verify audit hash chains and evidence integrity")
     v.add_argument("--incident", default=None)
     v.set_defaults(fn=_cmd_verify)
 
@@ -174,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     svc = CoreService.open(args.db)
     try:
         return args.fn(svc, args)
-    except (CoreError, ApprovalError, ValueError, KeyError, FileNotFoundError) as e:
+    except (CoreError, ApprovalError, PermissionError, ValueError, KeyError,
+            FileNotFoundError) as e:
         print(f"[core] error: {e}", file=sys.stderr)
         return 2
     finally:

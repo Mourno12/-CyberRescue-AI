@@ -5,6 +5,10 @@ for CyberRescue AI. It is built **alongside** the original WarRoom
 implementation (tag `warroom-baseline`), which stays untouched and runnable as
 the reference / Band compatibility mode.
 
+> **Schema v2 (Phase 2A):** the v1 `evidence` table held statements agents
+> wrote inside FINDING messages. It is now `finding_claims`; `evidence` holds
+> externally observed security data. See [phase2a-evidence.md](phase2a-evidence.md).
+
 **Principle:** LLM agents are reasoning components. They *propose*; the Core
 *records and decides*. No LLM output can create an approval or authorize an
 action.
@@ -21,7 +25,7 @@ Agent proposes action ─► CoreService.request_action ─► PolicyEngine (pur
 |---|---|
 | `models.py` | Pydantic entities, enums, audit/link vocabulary, policy I/O |
 | `ids.py` | General incident IDs, generated `INC-YYYYMMDD-NNNN`, `INC-A/B/C` aliases |
-| `db.py` | SQLite schema (16 tables), FKs, indexes, append-only triggers, transactions |
+| `db.py` | SQLite schema (v2: 18 tables — see Phase 2A), FKs, indexes, append-only triggers, v1→v2 migration, transactions |
 | `audit.py` | Hash-chained audit log (per incident) + `verify()` |
 | `store.py` | Domain persistence; every write paired with its audit event in one transaction |
 | `state_machine.py` | Incident lifecycle with role-checked triggers |
@@ -114,7 +118,8 @@ and DELETE on the log.
 Links point from a newer event to an older one:
 
 ```text
-EVIDENCE ─supports─► FINDING ─derived_from─► PROTOCOL_MESSAGE
+CLAIM ─supports─► FINDING ─derived_from─► PROTOCOL_MESSAGE      (schema v2; v1 called claims "evidence")
+FINDING_EVIDENCE_LINKED ─cites─► EVIDENCE_INGESTED,  ─concerns─► FINDING_RECORDED   (Phase 2A)
 SIGNOFF / VETO ─responds_to─► SIGNOFF_REQUESTED
 POLICY_DECISION ─evaluates─► ACTION_PROPOSED
 POLICY_DECISION ─relied_on─► APPROVAL_GRANTED / SIGNOFF_RECORDED
