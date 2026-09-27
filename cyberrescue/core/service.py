@@ -321,7 +321,11 @@ class CoreService:
                 auth_uid = ev.uid
                 self.apply_trigger(incident_id, Trigger.ACTION_AUTHORIZED, self.system,
                                    cause_uid=ev.uid)
-            elif decision.outcome == PolicyOutcome.REQUIRE_APPROVAL:
+            elif decision.outcome == PolicyOutcome.REQUIRE_APPROVAL and any(
+                    r.effect == "require_approval" and not r.satisfied
+                    for r in decision.rule_results):
+                # Only when a HUMAN approval is among what's missing; unmet
+                # specialist sign-offs (P4) are not something a human can grant.
                 self.audit.append(
                     EventType.APPROVAL_REQUESTED, incident_id=incident_id,
                     actor_id=self.system.id,

@@ -138,6 +138,22 @@ def test_approval_is_single_use_and_expires(svc, team, clock):
     assert late.decision.outcome == PolicyOutcome.REQUIRE_APPROVAL
 
 
+def test_ciso_approval_is_not_consumed_while_a_signoff_is_missing(svc, team):
+    inc = _inc_c(svc)
+    svc.record_signoff_request(inc.id, team["commander"], ["isolate_host"])
+    svc.record_signoff(inc.id, team["intel"])                    # compliance has not
+    ap = svc.grant_approval(inc.id, action="isolate_host", asset_id="srv-db-01",
+                            approver_actor_id=team["ciso"].id, reason="contain")
+    out = svc.request_action(inc.id, "isolate_host", "srv-db-01", team["commander"])
+    assert not out.authorized and out.decision.rules_failed == ["P4"]
+    assert svc.store.get_approval(ap.id).consumed_by_request_id is None
+    # Only a sign-off is missing -> no human approval is requested.
+    assert _types(svc, inc.id)[-1] == "POLICY_DECISION"
+    svc.record_signoff(inc.id, team["compliance"])
+    done = svc.request_action(inc.id, "isolate_host", "srv-db-01", team["commander"])
+    assert done.authorized and done.decision.approval_id == ap.id
+
+
 def test_action_claims_authorize_nothing(svc, team):
     inc = _inc_c(svc)
     ev = svc.record_action_claim(inc.id, team["commander"], ["wipe_host"],

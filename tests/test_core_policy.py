@@ -162,6 +162,47 @@ def test_p6_tier3_always_needs_a_human():
     assert d.outcome == ALLOW
 
 
+# --- Decision 1 (Phase 1b): sign-off and human approval are independent -----------
+
+def test_ciso_approval_cannot_substitute_for_a_missing_specialist_signoff():
+    inc = _incident()  # srv-db-01 is critical -> P5 also needs a human
+    only_intel = _signoffs(inc.id, ["isolate_host"], ["threat_intel"])  # compliance missing
+    everything = _approval("isolate_host", "srv-db-01", hold=True, veto=True, reason="all")
+
+    d = _eval("isolate_host", "srv-db-01", _snap(
+        inc, signoff_request=only_intel[0], signoffs=only_intel[1], approvals=[everything]))
+    assert d.outcome == REQUIRE and d.rules_failed == ["P4"] and d.approval_id is None
+    p4, p5 = (next(r for r in d.rule_results if r.rule == k) for k in ("P4", "P5"))
+    assert (p4.effect, p4.satisfied) == ("require_signoff", False)
+    assert "cannot substitute" in p4.reason
+    assert (p5.effect, p5.satisfied) == ("require_approval", True)
+
+
+def test_signoff_and_approval_are_both_required_for_containment_on_critical_asset():
+    inc = _incident()
+    full = _signoffs(inc.id, ["isolate_host"], ["threat_intel", "compliance"])
+    ap = _approval("isolate_host", "srv-db-01")
+    cases = {
+        (False, False): ["P4", "P5"],
+        (True, False): ["P5"],
+        (False, True): ["P4"],
+        (True, True): [],
+    }
+    for (signed, approved), unmet in cases.items():
+        kw = dict(signoff_request=full[0], signoffs=full[1]) if signed else {}
+        d = _eval("isolate_host", "srv-db-01", _snap(inc, approvals=[ap] if approved else [], **kw))
+        assert d.rules_failed == unmet, (signed, approved)
+        assert (d.outcome == ALLOW) == (unmet == []), (signed, approved)
+
+
+def test_applicable_rules_listed_per_tier():
+    from cyberrescue.core.policy import applicable_rules
+    assert applicable_rules("preserve_disk_image") == ["P0", "P1", "P2", "P3", "P7", "P8", "P9"]
+    assert "P4" in applicable_rules("isolate_host") and "P6" not in applicable_rules("isolate_host")
+    assert "P6" in applicable_rules("wipe_host") and "P4" not in applicable_rules("wipe_host")
+    assert applicable_rules("nope") == ["P0", "P1", "P2", "P3", "P9"]
+
+
 # --- the INC-C conflict: veto + legal hold ---------------------------------------
 
 def test_inc_c_wipe_needs_an_approval_that_overrides_both_veto_and_hold():

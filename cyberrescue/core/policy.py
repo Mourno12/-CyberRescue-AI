@@ -7,16 +7,17 @@ the same decision — and the decision can be re-derived later from the audit
 trail. The snapshot is built only from records the Core itself validated; no
 LLM text reaches this module.
 
-Rules (policy-v1). Hard DENY — no approval can lift these:
+Rules (policy-v2). Hard DENY — nothing can lift these:
   P0  action is not in the catalogue
   P1  requester may not request actions (only the Commander agent, or a
       human with an operator/approver role — WarRoom's single-action-authority)
   P2  incident missing or closed
   P3  host-targeted action whose asset is missing/unknown
   P9  a valid human approval record explicitly DENIES this action
-REQUIRE_APPROVAL — a valid human approval satisfies these:
+Specialist sign-off — ONLY sign-offs satisfy this; a human approval cannot:
   P4  tier-2: a recruited specialist has not signed off on the latest
       SIGNOFF_REQUEST covering this action
+Human approval — a valid human approval satisfies these:
   P5  tier-2 on an asset whose criticality is configured as needing a human
       (default: high, critical)
   P6  tier-3: always needs a human
@@ -24,6 +25,14 @@ REQUIRE_APPROVAL — a valid human approval satisfies these:
       carry ``overrides_veto``
   P8  destructive action on a host under a hold that requires human
       authorization — the approval must carry ``overrides_hold`` and a reason
+
+Outcome: any unmet DENY rule -> DENY; otherwise any unmet sign-off or approval
+rule -> REQUIRE_APPROVAL ("blocked pending authorization": the unmet rules say
+whether sign-offs, a human approval, or both are still needed); else ALLOW.
+Sign-off and approval requirements are independent — both must be met.
+
+policy-v1 (Phase 1a) let a human approval stand in for a missing P4 sign-off;
+policy-v2 removes that (Phase 1b decision). Decisions record their version.
 
 A valid approval: decision=approve, approver is a HUMAN whose role is in
 ``approver_roles``, scope equals (incident, action, asset) exactly, not
@@ -53,12 +62,26 @@ from cyberrescue.core.models import (
     RuleResult,
 )
 
-POLICY_VERSION = "policy-v1"
+POLICY_VERSION = "policy-v2"
 DEFAULT_APPROVAL_TTL_MINUTES = 60
 TTL_ENV = "CYBERRESCUE_APPROVAL_TTL_MINUTES"
 
 DENY = "deny"
 REQUIRE = "require_approval"
+REQUIRE_SIGNOFF = "require_signoff"
+
+
+def applicable_rules(action: str) -> list[str]:
+    """Every rule the engine checks for ``action`` (for explainability logs)."""
+    spec = get_action(action)
+    rules = ["P0", "P1", "P2", "P3", "P9"]
+    if spec is not None:
+        if spec.tier == ActionTier.CONTAINMENT:
+            rules += ["P4", "P5"]
+        if spec.tier == ActionTier.DESTRUCTIVE:
+            rules += ["P6"]
+        rules += ["P7", "P8"]
+    return sorted(rules, key=lambda r: int(r[1:]))
 
 
 class PolicyConfig(BaseModel):
@@ -164,20 +187,25 @@ class PolicyEngine:
         if spec is not None:
             tier = spec.tier
             if tier == ActionTier.CONTAINMENT and inc is not None:
-                # P4 — specialist sign-offs on the plan covering this action
+                # P4 — specialist sign-offs on the plan covering this action.
+                # Independent of human approval: only sign-offs satisfy it.
                 need = inc.specialists
                 req = snapshot.signoff_request
                 if need:
                     if req is None or action not in req.actions:
-                        demands.append(("P4", f"no SIGNOFF_REQUEST covering {action}; "
-                                        f"sign-off needed from {sorted(need)}", False, False))
+                        results.append(RuleResult(
+                            rule="P4", effect=REQUIRE_SIGNOFF,
+                            reason=f"no SIGNOFF_REQUEST covering {action}; sign-off needed "
+                                   f"from {sorted(need)} (a human approval cannot substitute)"))
                     else:
                         signed = {s.actor_role: s for s in snapshot.signoffs
                                   if s.actor_role in need}
                         missing = sorted(need - set(signed))
                         if missing:
-                            demands.append(("P4", f"missing sign-off from {missing}",
-                                            False, False))
+                            results.append(RuleResult(
+                                rule="P4", effect=REQUIRE_SIGNOFF,
+                                reason=f"missing sign-off from {missing} "
+                                       "(a human approval cannot substitute)"))
                         else:
                             relied += [s.event_uid for s in signed.values()]
                 # P5 — containment on a high-value asset needs a human

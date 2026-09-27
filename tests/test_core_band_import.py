@@ -6,7 +6,14 @@ import pytest
 
 from cyberrescue.core import db
 from cyberrescue.core.band_import import Roster, import_band_context
-from cyberrescue.core.models import ActionStatus, EventType, IncidentStatus, PolicyOutcome
+from cyberrescue.core.ingest import IngestedMessage, ProtocolIngestor
+from cyberrescue.core.models import (
+    ActionStatus,
+    ActorKind,
+    EventType,
+    IncidentStatus,
+    PolicyOutcome,
+)
 from cyberrescue.core.policy import PolicyConfig
 from cyberrescue.core.service import CoreService
 
@@ -91,6 +98,16 @@ def test_synthetic_inc_c_run_through_the_gate(svc):
 
     svc.grant_approval(iid, action="isolate_host", asset_id="srv-db-01",
                        approver_actor_id=ciso.id, reason="contain the spread")
+    # policy-v2: the CISO approval covers P5, but cannot stand in for the
+    # missing Compliance sign-off (P4) — isolation stays blocked.
+    still = svc.request_action(iid, "isolate_host", "srv-db-01", cmd)
+    assert not still.authorized and still.decision.rules_failed == ["P4"]
+    ProtocolIngestor(svc).ingest(IngestedMessage(
+        incident_ref=iid, sender_ref="synthetic-agent-compliance",
+        sender_kind=ActorKind.AGENT, sender_role="compliance", source="band",
+        external_id="syn-inc-c-extra-signoff",
+        content='```json\n{"type": "SIGNOFF", "incident": "INC-C", '
+                '"summary": "Isolation is fine."}\n```'))
     assert svc.request_action(iid, "isolate_host", "srv-db-01", cmd).authorized
     svc.grant_approval(iid, action="wipe_host", asset_id="srv-db-01",
                        approver_actor_id=ciso.id, overrides_hold=True, overrides_veto=True,
