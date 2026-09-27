@@ -53,17 +53,21 @@ def _types(svc):
     return [e.event_type for e in svc.audit.events(INC)]
 
 
-def test_finding_creates_finding_and_linked_evidence(svc, ing):
+def test_finding_creates_finding_and_linked_claims(svc, ing):
+    # The FINDING block's "evidence" list is the agent's CLAIMS (schema v2).
     res = ing.ingest(_agent("threat_intel", _block(
         type="FINDING", summary="BlackHaze active", severity="critical",
         evidence=["185.220.101.47 = C2", "spread critical"])))
     assert res.protocol_valid and res.protocol_types == ["FINDING"]
     [f] = svc.store.findings(INC)
     assert f.severity == "critical"
-    ev = svc.store.evidence_for(f.id)
-    assert [e.content for e in ev] == ["185.220.101.47 = C2", "spread critical"]
-    rels = {(link.relation, link.target_uid) for link in svc.audit.get(ev[0].event_uid).links}
+    claims = svc.store.claims_for(f.id)
+    assert [c.content for c in claims] == ["185.220.101.47 = C2", "spread critical"]
+    ev = svc.audit.get(claims[0].event_uid)
+    assert ev.event_type == "CLAIM_RECORDED"
+    rels = {(link.relation, link.target_uid) for link in ev.links}
     assert ("supports", f.event_uid) in rels and ("derived_from", res.event_uid) in rels
+    assert svc.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 
 def test_prose_and_malformed_blocks_are_marked_protocol_invalid(svc, ing):

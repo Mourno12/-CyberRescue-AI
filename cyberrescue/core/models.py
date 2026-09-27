@@ -65,7 +65,13 @@ class EventType(str, Enum):
     INCIDENT_REF_MISMATCH = "INCIDENT_REF_MISMATCH"
     AGENT_ACTION_CLAIM = "AGENT_ACTION_CLAIM"
     CLAIM_REJECTED = "CLAIM_REJECTED"
+    # evidence (Phase 2A): externally observed data, and findings citing it
+    EVIDENCE_INGESTED = "EVIDENCE_INGESTED"
+    FINDING_EVIDENCE_LINKED = "FINDING_EVIDENCE_LINKED"
     # analysis / positions
+    CLAIM_RECORDED = "CLAIM_RECORDED"          # a statement written inside a finding
+    # LEGACY (schema v1): claims were recorded under this misleading name. Kept
+    # so v1 audit chains stay readable and verifiable; never emitted since v2.
     EVIDENCE_RECORDED = "EVIDENCE_RECORDED"
     FINDING_RECORDED = "FINDING_RECORDED"
     SIGNOFF_REQUESTED = "SIGNOFF_REQUESTED"
@@ -94,12 +100,13 @@ class LinkRelation(str, Enum):
     """Typed edge from a NEWER audit event to an OLDER one it refers to.
 
     Read ``A --relation--> B`` as "A <relation> B", e.g.
-    ``EVIDENCE --supports--> FINDING``, ``POLICY_DECISION --evaluates-->
-    ACTION_PROPOSED``, ``ACTION_AUTHORIZED --authorizes--> POLICY_DECISION``.
+    ``CLAIM --supports--> FINDING``, ``FINDING_EVIDENCE_LINKED --cites-->
+    EVIDENCE_INGESTED``, ``POLICY_DECISION --evaluates--> ACTION_PROPOSED``.
     """
 
     DERIVED_FROM = "derived_from"   # domain event -> the transport message it came from
-    SUPPORTS = "supports"           # evidence -> finding
+    SUPPORTS = "supports"           # claim -> the finding it was written in
+    CITES = "cites"                 # finding-evidence link -> EVIDENCE_INGESTED
     RESPONDS_TO = "responds_to"     # signoff/veto -> signoff request
     EVALUATES = "evaluates"         # policy decision -> action proposed
     RELIED_ON = "relied_on"         # policy decision -> approval/signoff it used
@@ -223,12 +230,74 @@ class AuditEvent(_Model):
     hash: str
 
 
-class Evidence(_Model):
+class FindingClaim(_Model):
+    """A statement written inside a finding (e.g. an entry in a FINDING
+    message's ``evidence`` list). It is the analyst's CLAIM — not evidence."""
     id: str
     incident_id: str
     finding_id: str | None = None
     kind: str = "text"
     content: str = ""
+    event_uid: str
+    created_at: str = ""
+
+
+class EvidenceKind(str, Enum):
+    PROCESS = "process"
+    FILE = "file"
+    NETWORK = "network"
+    AUTH = "auth"
+    LOG = "log"
+    ALERT = "alert"
+    IOC = "ioc"
+    OTHER = "other"
+
+
+class Provenance(str, Enum):
+    SYNTHETIC = "synthetic"   # generated for tests/demos
+    REPLAYED = "replayed"     # real recorded telemetry, replayed offline
+    LIVE = "live"             # collected from a live system
+
+
+class EvidenceRelation(str, Enum):
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    CONTEXT = "context"
+
+
+class EvidenceRecord(_Model):
+    """Externally observed security data bound to exactly one incident.
+
+    Immutable once stored. ``content_sha256`` seals ``raw``; ``record_sha256``
+    seals every stored field (see ``evidence.SEALED_FIELDS``); both are also
+    recorded in the EVIDENCE_INGESTED audit event.
+    """
+    id: str
+    incident_id: str
+    source: str
+    source_ref: str = ""
+    kind: EvidenceKind
+    event_type: str
+    observed_at: str
+    ingested_at: str
+    host: str | None = None
+    asset_id: str | None = None
+    user: str | None = None
+    raw: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: Provenance
+    content_sha256: str
+    record_sha256: str
+    ingested_by: str
+    event_uid: str
+
+
+class FindingEvidence(_Model):
+    finding_id: str
+    evidence_id: str
+    relation: EvidenceRelation = EvidenceRelation.SUPPORTS
+    linked_by: str
     event_uid: str
     created_at: str = ""
 

@@ -175,17 +175,22 @@ class CoreService:
 
     # --- analysis records ---------------------------------------------------------
     def record_finding(self, incident_id: str, author: Actor, summary: str, *,
-                       severity: str | None = None, evidence: Iterable[str] = (),
+                       severity: str | None = None, claims: Iterable[str] = (),
                        source_uid: str | None = None, source: str = "core") -> Finding:
+        """Record a finding and the statements (claims) written in it.
+
+        ``claims`` are the analyst's own assertions — for WarRoom agents, the
+        entries of a FINDING message's ``evidence`` list. They are stored as
+        finding claims, never as evidence.
+        """
         self._incident(incident_id)
         with db.transaction(self.conn):
             f = self.store.add_finding(incident_id, author_actor_id=author.id, summary=summary,
                                        severity=severity, source_uid=source_uid, source=source)
-            for item in evidence:
-                self.store.add_evidence(incident_id, content=str(item),
-                                        kind="protocol_evidence", finding=f,
-                                        actor_id=author.id, source_uid=source_uid,
-                                        source=source)
+            for item in claims:
+                self.store.add_claim(incident_id, content=str(item), kind="protocol_claim",
+                                     finding=f, actor_id=author.id, source_uid=source_uid,
+                                     source=source)
         return f
 
     def reject_claim(self, incident_id: str, actor: Actor, claim: str, reason: str, *,

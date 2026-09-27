@@ -13,6 +13,15 @@ Design notes:
   * Autocommit connection + explicit ``transaction()`` (BEGIN IMMEDIATE, or a
     SAVEPOINT when nested) so a domain row and its audit event commit or roll
     back together.
+
+Schema versions:
+  * v1 (Phase 1): 16 tables. Its ``evidence`` table held agent-written text
+    from FINDING messages — claims, not evidence.
+  * v2 (Phase 2A): that table is renamed ``finding_claims`` (data preserved
+    verbatim); a new, immutable ``evidence`` table holds externally observed
+    security data; ``finding_evidence`` links findings to the evidence they
+    cite. ``init_schema`` migrates a v1 database in place (see
+    ``_migrate_v1_to_v2``).
 """
 
 from __future__ import annotations
@@ -24,14 +33,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 TABLES = (
     "schema_meta", "actors", "assets", "incidents", "incident_aliases",
-    "audit_events", "event_links", "evidence", "findings", "signoffs",
-    "vetoes", "legal_holds", "action_requests", "policy_decisions",
-    "approvals", "risk_snapshots",
+    "audit_events", "event_links", "findings", "finding_claims", "evidence",
+    "finding_evidence", "signoffs", "vetoes", "legal_holds", "action_requests",
+    "policy_decisions", "approvals", "risk_snapshots",
 )
 
 _DDL = """
@@ -134,7 +143,9 @@ CREATE TABLE IF NOT EXISTS findings (
     created_at      TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS evidence (
+-- Claims: statements an analyst (usually an LLM agent) wrote inside a FINDING.
+-- NOT evidence. (Named "evidence" in schema v1.)
+CREATE TABLE IF NOT EXISTS finding_claims (
     id          TEXT PRIMARY KEY,
     incident_id TEXT NOT NULL REFERENCES incidents(id),
     finding_id  TEXT REFERENCES findings(id),
@@ -143,6 +154,65 @@ CREATE TABLE IF NOT EXISTS evidence (
     event_uid   TEXT NOT NULL REFERENCES audit_events(uid),
     created_at  TEXT NOT NULL
 );
+
+-- Evidence: externally observed security data, submitted by a collector or a
+-- human operator. Immutable; bound to exactly one incident; sealed by two
+-- SHA-256 hashes that are also recorded in its EVIDENCE_INGESTED audit event.
+CREATE TABLE IF NOT EXISTS evidence (
+    id             TEXT PRIMARY KEY,
+    incident_id    TEXT NOT NULL REFERENCES incidents(id),
+    source         TEXT NOT NULL,
+    source_ref     TEXT NOT NULL DEFAULT '',
+    kind           TEXT NOT NULL CHECK (kind IN
+                       ('process', 'file', 'network', 'auth', 'log', 'alert', 'ioc', 'other')),
+    event_type     TEXT NOT NULL,
+    observed_at    TEXT NOT NULL,
+    ingested_at    TEXT NOT NULL,
+    host           TEXT,
+    asset_id       TEXT REFERENCES assets(asset_id),
+    user_name      TEXT,
+    raw            TEXT NOT NULL,
+    data           TEXT NOT NULL DEFAULT '{}',
+    metadata       TEXT NOT NULL DEFAULT '{}',
+    provenance     TEXT NOT NULL CHECK (provenance IN ('synthetic', 'replayed', 'live')),
+    content_sha256 TEXT NOT NULL,
+    record_sha256  TEXT NOT NULL,
+    ingested_by    TEXT NOT NULL REFERENCES actors(id),
+    event_uid      TEXT NOT NULL REFERENCES audit_events(uid),
+    UNIQUE (incident_id, source, source_ref, content_sha256)
+);
+CREATE INDEX IF NOT EXISTS ix_evidence_time ON evidence(incident_id, observed_at);
+CREATE INDEX IF NOT EXISTS ix_evidence_host ON evidence(incident_id, host);
+CREATE INDEX IF NOT EXISTS ix_evidence_kind ON evidence(incident_id, kind);
+CREATE TRIGGER IF NOT EXISTS evidence_no_update
+BEFORE UPDATE ON evidence
+BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS evidence_no_delete
+BEFORE DELETE ON evidence
+BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+
+-- A finding citing evidence. Append-only; never crosses incidents.
+CREATE TABLE IF NOT EXISTS finding_evidence (
+    finding_id  TEXT NOT NULL REFERENCES findings(id),
+    evidence_id TEXT NOT NULL REFERENCES evidence(id),
+    relation    TEXT NOT NULL CHECK (relation IN ('supports', 'contradicts', 'context')),
+    linked_by   TEXT NOT NULL REFERENCES actors(id),
+    event_uid   TEXT NOT NULL REFERENCES audit_events(uid),
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (finding_id, evidence_id)
+);
+CREATE INDEX IF NOT EXISTS ix_finding_evidence_ev ON finding_evidence(evidence_id);
+CREATE TRIGGER IF NOT EXISTS finding_evidence_same_incident
+BEFORE INSERT ON finding_evidence
+WHEN (SELECT incident_id FROM findings WHERE id = NEW.finding_id)
+     IS NOT (SELECT incident_id FROM evidence WHERE id = NEW.evidence_id)
+BEGIN SELECT RAISE(ABORT, 'finding and evidence belong to different incidents'); END;
+CREATE TRIGGER IF NOT EXISTS finding_evidence_no_update
+BEFORE UPDATE ON finding_evidence
+BEGIN SELECT RAISE(ABORT, 'finding_evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS finding_evidence_no_delete
+BEFORE DELETE ON finding_evidence
+BEGIN SELECT RAISE(ABORT, 'finding_evidence is append-only'); END;
 
 CREATE TABLE IF NOT EXISTS signoffs (
     id                TEXT PRIMARY KEY,
@@ -261,11 +331,49 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        (name,)).fetchone() is not None
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 -> v2: rename the v1 ``evidence`` table (agent-written claims) to
+    ``finding_claims``. Rows are preserved verbatim; audit events are never
+    rewritten (their ``EVIDENCE_RECORDED`` type stays readable as a legacy
+    claim event), so every audit chain still verifies. Idempotent: detects the
+    v1 table by its shape, so a re-run after a partial migration is safe."""
+    if not _has_table(conn, "evidence"):
+        return
+    cols = _columns(conn, "evidence")
+    if "finding_id" not in cols or "content_sha256" in cols:
+        return  # already the v2 evidence table
+    if _has_table(conn, "finding_claims"):
+        raise RuntimeError("refusing to migrate: both a v1 'evidence' table and "
+                           "'finding_claims' exist")
+    with transaction(conn):
+        conn.execute("ALTER TABLE evidence RENAME TO finding_claims")
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('migration.v1_to_v2', "
+            "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables/indexes/triggers (idempotent) and record the version."""
+    """Create or upgrade the schema (idempotent), then record the version."""
+    if _has_table(conn, "schema_meta"):
+        current = schema_version(conn)
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(f"database schema v{current} is newer than this code "
+                               f"(v{SCHEMA_VERSION})")
+        if current == 1:
+            _migrate_v1_to_v2(conn)  # must run BEFORE the DDL creates the new 'evidence'
     conn.executescript(_DDL)
     conn.execute(
-        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
+        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (str(SCHEMA_VERSION),),
     )
 

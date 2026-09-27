@@ -35,9 +35,9 @@ from cyberrescue.core.models import (
     Approval,
     ApprovalDecision,
     Asset,
-    Evidence,
     EventType,
     Finding,
+    FindingClaim,
     HoldStatus,
     Incident,
     IncidentSnapshot,
@@ -257,7 +257,7 @@ class CoreStore:
                 payload={"from": inc.status.value, "to": new_status.value, "trigger": trigger},
                 links=[(LinkRelation.CAUSED_BY, cause_uid)] if cause_uid else [])
 
-    # --- findings & evidence --------------------------------------------------
+    # --- findings & claims -----------------------------------------------------
     def add_finding(self, incident_id: str, *, author_actor_id: str | None, summary: str,
                     severity: str | None = None, source_uid: str | None = None,
                     source: str = "core") -> Finding:
@@ -277,10 +277,11 @@ class CoreStore:
                 (fid, incident_id, author_actor_id, severity, summary, ev.uid, ev.ts))
         return f
 
-    def add_evidence(self, incident_id: str, *, content: str, kind: str = "text",
-                     finding: Finding | None = None, actor_id: str | None = None,
-                     source_uid: str | None = None, source: str = "core") -> Evidence:
-        eid = _new_id()
+    def add_claim(self, incident_id: str, *, content: str, kind: str = "text",
+                  finding: Finding | None = None, actor_id: str | None = None,
+                  source_uid: str | None = None, source: str = "core") -> FindingClaim:
+        """Record a statement made inside a finding. A claim, NOT evidence."""
+        cid = _new_id()
         links: list[LinkSpec] = []
         if finding:
             links.append((LinkRelation.SUPPORTS, finding.event_uid))
@@ -288,25 +289,30 @@ class CoreStore:
             links.append((LinkRelation.DERIVED_FROM, source_uid))
         with transaction(self.conn):
             ev = self.audit.append(
-                EventType.EVIDENCE_RECORDED, incident_id=incident_id, actor_id=actor_id,
-                source=source, payload={"evidence_id": eid, "kind": kind, "content": content,
+                EventType.CLAIM_RECORDED, incident_id=incident_id, actor_id=actor_id,
+                source=source, payload={"claim_id": cid, "kind": kind, "content": content,
                                         "finding_id": finding.id if finding else None},
                 links=links)
             self.conn.execute(
-                "INSERT INTO evidence(id, incident_id, finding_id, kind, content, event_uid, "
-                "created_at) VALUES (?,?,?,?,?,?,?)",
-                (eid, incident_id, finding.id if finding else None, kind, content, ev.uid, ev.ts))
-        return Evidence(id=eid, incident_id=incident_id,
-                        finding_id=finding.id if finding else None, kind=kind,
-                        content=content, event_uid=ev.uid, created_at=ev.ts)
+                "INSERT INTO finding_claims(id, incident_id, finding_id, kind, content, "
+                "event_uid, created_at) VALUES (?,?,?,?,?,?,?)",
+                (cid, incident_id, finding.id if finding else None, kind, content, ev.uid, ev.ts))
+        return FindingClaim(id=cid, incident_id=incident_id,
+                            finding_id=finding.id if finding else None, kind=kind,
+                            content=content, event_uid=ev.uid, created_at=ev.ts)
 
     def findings(self, incident_id: str) -> list[Finding]:
         return [Finding(**dict(r)) for r in self._all(
             "SELECT * FROM findings WHERE incident_id = ? ORDER BY created_at", (incident_id,))]
 
-    def evidence_for(self, finding_id: str) -> list[Evidence]:
-        return [Evidence(**dict(r)) for r in self._all(
-            "SELECT * FROM evidence WHERE finding_id = ? ORDER BY created_at", (finding_id,))]
+    def get_finding(self, finding_id: str) -> Finding | None:
+        row = self._one("SELECT * FROM findings WHERE id = ?", (finding_id,))
+        return Finding(**dict(row)) if row else None
+
+    def claims_for(self, finding_id: str) -> list[FindingClaim]:
+        return [FindingClaim(**dict(r)) for r in self._all(
+            "SELECT * FROM finding_claims WHERE finding_id = ? ORDER BY created_at",
+            (finding_id,))]
 
     # --- sign-offs ------------------------------------------------------------
     def add_signoff_request(self, incident_id: str, *, actor_id: str, actions: list[str],

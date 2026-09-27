@@ -151,7 +151,8 @@ class ProtocolIngestor:
         elif btype == "FINDING":
             svc.record_finding(incident_id, actor, block.summary,
                                severity=str(block.severity) if block.severity else None,
-                               evidence=block.evidence, source_uid=msg_uid, source=source)
+                               claims=block.evidence,  # protocol field name; these are claims
+                               source_uid=msg_uid, source=source)
         elif btype == "SIGNOFF_REQUEST":
             actions = list(block.actions) or match_actions_in_text(block.summary)
             svc.record_signoff_request(incident_id, actor, actions,
