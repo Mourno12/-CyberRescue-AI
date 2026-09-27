@@ -14,12 +14,18 @@ Trust rules enforced here:
    read from). A block's own ``incident`` field is only compared, and a
    disagreement is recorded as ``INCIDENT_REF_MISMATCH``.
 3. **Only an allowlist of block fields is read:** ``type``, ``incident``,
-   ``summary``, ``severity``, ``evidence``, ``actions``, ``decision``,
-   ``regulation``. ``ProtocolMessage`` allows extra keys, so a block may carry
-   ``"approved": true`` — it is kept verbatim in the audit payload and ignored.
+   ``summary``, ``severity``, ``evidence``, ``evidence_ids``, ``actions``,
+   ``decision``, ``regulation``. ``ProtocolMessage`` allows extra keys, so a
+   block may carry ``"approved": true`` — it is kept verbatim in the audit
+   payload and ignored.
 4. **This module never creates approvals.** Only ``CoreService.grant_approval``
    can, and it is not called from here (a test enforces that).
 5. ``ACTION`` blocks become ``AGENT_ACTION_CLAIM`` events — claims, not actions.
+6. **Terminology (schema v2).** A FINDING block's ``evidence`` list holds the
+   agent's *claims* (stored as finding claims). ``evidence_ids`` (Phase 2A) are
+   *citations* of evidence a collector already stored: valid ones are linked;
+   invalid ones are recorded as ``CLAIM_REJECTED``. A message can never
+   create, alter or delete evidence.
 """
 
 from __future__ import annotations
@@ -149,10 +155,15 @@ class ProtocolIngestor:
             svc.apply_trigger(incident_id, _TRIGGER_TYPES[btype], actor,
                               cause_uid=msg_uid, source=source)
         elif btype == "FINDING":
-            svc.record_finding(incident_id, actor, block.summary,
-                               severity=str(block.severity) if block.severity else None,
-                               claims=block.evidence,  # protocol field name; these are claims
-                               source_uid=msg_uid, source=source)
+            finding = svc.record_finding(
+                incident_id, actor, block.summary,
+                severity=str(block.severity) if block.severity else None,
+                claims=block.evidence,  # protocol field name; these are claims
+                source_uid=msg_uid, source=source)
+            extras = block.model_extra or {}
+            if "evidence_ids" in extras:  # citations only — never evidence creation
+                svc.cite_evidence_from_message(finding, actor, extras["evidence_ids"],
+                                               source_uid=msg_uid, source=source)
         elif btype == "SIGNOFF_REQUEST":
             actions = list(block.actions) or match_actions_in_text(block.summary)
             svc.record_signoff_request(incident_id, actor, actions,

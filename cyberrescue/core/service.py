@@ -72,6 +72,10 @@ class CollectorError(PermissionError):
     """Raised when an actor that may not submit evidence tries to."""
 
 
+class CitationError(PermissionError):
+    """Raised when an actor may not link evidence to a finding."""
+
+
 # Humans who may submit evidence (system collectors always may; agents never).
 COLLECTOR_HUMAN_ROLES = frozenset({"operator", "ciso", "dpo", "general_counsel"})
 # Upper bound on evidence ids one finding may cite in a single message.
@@ -205,14 +209,26 @@ class CoreService:
     # --- analysis records ---------------------------------------------------------
     def record_finding(self, incident_id: str, author: Actor, summary: str, *,
                        severity: str | None = None, claims: Iterable[str] = (),
+                       evidence_ids: Iterable[str] = (),
+                       evidence_relation: EvidenceRelation | str = EvidenceRelation.SUPPORTS,
                        source_uid: str | None = None, source: str = "core") -> Finding:
-        """Record a finding and the statements (claims) written in it.
+        """Record a finding, the statements (claims) written in it, and the
+        evidence it cites.
 
         ``claims`` are the analyst's own assertions — for WarRoom agents, the
         entries of a FINDING message's ``evidence`` list. They are stored as
-        finding claims, never as evidence.
+        finding claims, never as evidence. ``evidence_ids`` must name existing
+        evidence of the SAME incident; any invalid id rejects the whole call
+        (strict programmatic API — see ``cite_evidence_from_message`` for the
+        audited, lenient path used for agent messages).
         """
-        self._incident(incident_id)
+        inc = self._incident(incident_id)
+        ids = list(dict.fromkeys(evidence_ids))
+        records = [self._citable_evidence(inc.id, eid) for eid in ids]
+        if records and inc.is_terminal:
+            raise CoreError(f"incident {inc.id} is {inc.status.value}: citations are frozen")
+        if records and not self._may_cite(author, author_id=author.id):
+            raise CitationError(f"{author.kind.value}/{author.role} may not cite evidence")
         with db.transaction(self.conn):
             f = self.store.add_finding(incident_id, author_actor_id=author.id, summary=summary,
                                        severity=severity, source_uid=source_uid, source=source)
@@ -220,7 +236,96 @@ class CoreService:
                 self.store.add_claim(incident_id, content=str(item), kind="protocol_claim",
                                      finding=f, actor_id=author.id, source_uid=source_uid,
                                      source=source)
+            for record in records:
+                self.evidence.link(f, record, relation=EvidenceRelation(evidence_relation),
+                                   linked_by=author.id, source=source)
         return f
+
+    # --- citations (finding -> evidence) --------------------------------------------
+    def _citable_evidence(self, incident_id: str, evidence_id: Any) -> EvidenceRecord:
+        record = self.evidence.get(evidence_id) if isinstance(evidence_id, str) else None
+        if record is None or record.incident_id != incident_id:
+            # One message for "missing" and "other incident": no cross-incident oracle.
+            raise CoreError(f"unknown evidence id {evidence_id!r} for incident {incident_id}")
+        return record
+
+    @staticmethod
+    def _may_cite(actor: Actor, *, author_id: str | None) -> bool:
+        """System collectors and human operators may link any finding; an agent
+        may only cite evidence in a finding it authored itself."""
+        if actor.kind == ActorKind.SYSTEM:
+            return True
+        if actor.kind == ActorKind.HUMAN:
+            return actor.role in COLLECTOR_HUMAN_ROLES
+        return actor.role != "unknown" and actor.id == author_id
+
+    def link_evidence(self, finding_id: str, evidence_id: str, *, linked_by: str,
+                      relation: EvidenceRelation | str = EvidenceRelation.SUPPORTS,
+                      source: str = "core") -> FindingEvidence:
+        """Record that a finding cites evidence (same incident; idempotent)."""
+        actor = self.store.get_actor(linked_by)
+        if actor is None:
+            raise CitationError(f"actor {linked_by!r} is not registered with the Core")
+        finding = self.store.get_finding(finding_id)
+        if finding is None:
+            raise CoreError(f"unknown finding {finding_id!r}")
+        inc = self._incident(finding.incident_id)
+        if inc.is_terminal:
+            raise CoreError(f"incident {inc.id} is {inc.status.value}: citations are frozen")
+        if not self._may_cite(actor, author_id=finding.author_actor_id):
+            raise CitationError(f"{actor.kind.value}/{actor.role} may not link evidence to "
+                                f"finding {finding_id}")
+        record = self._citable_evidence(inc.id, evidence_id)
+        link, _ = self.evidence.link(finding, record, relation=EvidenceRelation(relation),
+                                     linked_by=actor.id, source=source)
+        return link
+
+    def cite_evidence_from_message(self, finding: Finding, actor: Actor, evidence_ids: Any,
+                                   *, source_uid: str | None = None,
+                                   source: str = "core") -> tuple[list[str], list[str]]:
+        """Citations taken from an agent's FINDING message (untrusted text).
+
+        Lenient but audited: the finding stands; each valid id is linked; each
+        invalid one (not a string, unknown, another incident's, over the cap)
+        is recorded as CLAIM_REJECTED. Returns ``(linked_ids, rejected_refs)``.
+        Citing never creates, alters or deletes evidence.
+        """
+        linked: list[str] = []
+        rejected: list[str] = []
+
+        def reject(ref: Any, reason: str) -> None:
+            rejected.append(repr(ref))
+            self.reject_claim(finding.incident_id, actor, "EVIDENCE_CITATION",
+                              f"{reason}: {ref!r}"[:500], source_uid=source_uid, source=source)
+
+        if not isinstance(evidence_ids, list):
+            reject(evidence_ids, "evidence_ids must be a list of evidence ids")
+            return linked, rejected
+        if self._incident(finding.incident_id).is_terminal:
+            for ref in evidence_ids:
+                reject(ref, "incident is closed; citations are frozen")
+            return linked, rejected
+        if not self._may_cite(actor, author_id=finding.author_actor_id):
+            for ref in evidence_ids:
+                reject(ref, f"{actor.kind.value}/{actor.role} may not cite evidence")
+            return linked, rejected
+        seen: set[str] = set()
+        for n, ref in enumerate(evidence_ids):
+            if n >= MAX_CITATIONS_PER_FINDING:
+                reject(ref, f"more than {MAX_CITATIONS_PER_FINDING} citations")
+                continue
+            if isinstance(ref, str) and ref in seen:
+                continue
+            try:
+                record = self._citable_evidence(finding.incident_id, ref)
+            except CoreError:
+                reject(ref, "unknown evidence id for this incident")
+                continue
+            seen.add(record.id)
+            self.evidence.link(finding, record, relation=EvidenceRelation.SUPPORTS,
+                               linked_by=actor.id, source=source)
+            linked.append(record.id)
+        return linked, rejected
 
     def reject_claim(self, incident_id: str, actor: Actor, claim: str, reason: str, *,
                      source_uid: str | None = None, source: str = "core") -> AuditEvent:
