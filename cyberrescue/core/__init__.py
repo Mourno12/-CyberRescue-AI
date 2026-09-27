@@ -25,17 +25,27 @@ from cyberrescue.core.models import (
     LinkRelation,
     PolicyOutcome,
 )
+from cyberrescue.core.policy import PolicyConfig, PolicyEngine
+from cyberrescue.core.service import ApprovalError, CoreError, CoreService
+
+open_core = CoreService.open
 
 __all__ = [
     "LEGACY_ALIASES",
     "ActionStatus",
     "ActionTier",
     "ActorKind",
+    "ApprovalError",
+    "CoreError",
+    "CoreService",
     "EventType",
     "IncidentStatus",
     "LinkRelation",
+    "PolicyConfig",
+    "PolicyEngine",
     "PolicyOutcome",
     "generate_incident_id",
     "is_valid_incident_id",
+    "open_core",
     "parse_incident_ref",
 ]
