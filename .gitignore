@@ -20,3 +20,7 @@ reports/
 demo/
 # Runtime pid file written by scripts/run_all.ps1
 .run_all.pids
+# CyberRescue Core SQLite database (+ WAL/SHM side files)
+cyberrescue*.db
+cyberrescue*.db-wal
+cyberrescue*.db-shm
