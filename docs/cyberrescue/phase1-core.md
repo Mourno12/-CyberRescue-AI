@@ -1,4 +1,4 @@
-# CyberRescue Core — Phase 1a
+# CyberRescue Core — Phase 1 (1a + 1b)
 
 The CyberRescue Core (`cyberrescue/core/`) is the deterministic source of truth
 for CyberRescue AI. It is built **alongside** the original WarRoom
@@ -27,11 +27,12 @@ Agent proposes action ─► CoreService.request_action ─► PolicyEngine (pur
 | `state_machine.py` | Incident lifecycle with role-checked triggers |
 | `catalog.py` | Tiered action catalogue |
 | `holds.py` | Legal holds derived from `reg_rules.json` (parity-tested against the Compliance tool) |
-| `policy.py` | The gate — pure, versioned (`policy-v1`) |
+| `policy.py` | The gate — pure, versioned (`policy-v2`) |
 | `service.py` | `CoreService` — the single entry point and trust boundary |
 | `ingest.py` | Protocol messages → Core records (runtime use of `shared.schemas.ProtocolMessage`) |
 | `band_import.py` | Offline import of a saved Band room history |
 | `cli.py` | `python -m cyberrescue.core …` |
+| `gate.py` | Phase 1b Commander action gate (shadow / enforce) |
 
 Dependencies: Python stdlib (`sqlite3`, `hashlib`, …) + `pydantic`. The Core
 never imports the Band SDK or an LLM client (enforced by `tests/test_core_isolation.py`).
@@ -54,7 +55,7 @@ never imports the Band SDK or an LLM client (enforced by `tests/test_core_isolat
 6. **Legal holds** are derived by code when an incident opens, so they bind even
    if the Compliance LLM never posts a veto.
 
-## Policy rules (`policy-v1`)
+## Policy rules (`policy-v2`)
 
 | Rule | Effect | Condition |
 |---|---|---|
@@ -63,7 +64,7 @@ never imports the Band SDK or an LLM client (enforced by `tests/test_core_isolat
 | P2 | DENY | incident missing or closed |
 | P3 | DENY | host action with missing/unknown asset |
 | P9 | DENY | a valid human approval record explicitly denies the action |
-| P4 | needs approval | tier 2 without sign-off from every recruited specialist on the latest `SIGNOFF_REQUEST` covering it |
+| P4 | needs **sign-off** (an approval can NOT substitute) | tier 2 without sign-off from every recruited specialist on the latest `SIGNOFF_REQUEST` covering it |
 | P5 | needs approval | tier 2 on a high/critical asset (configurable) |
 | P6 | needs approval | tier 3 (always) |
 | P7 | approval with `overrides_veto` | an active Compliance veto covers the action |
@@ -80,6 +81,14 @@ consumed by the action it authorizes. Lifetime defaults to **60 minutes**
 
 This is intentionally **stricter than WarRoom**: containment on a high/critical
 asset (e.g. isolating `srv-db-01`) needs a human.
+
+**Sign-off and approval are independent (policy-v2, Phase 1b).** Isolating
+`srv-db-01` needs *both* every recruited specialist's sign-off (P4) *and* a
+CISO approval (P5). A CISO approval — even one carrying every override flag —
+never satisfies P4, and is not consumed while a sign-off is missing. The
+decision outcome is `REQUIRE_APPROVAL` ("blocked pending authorization"); the
+unmet rules and their `effect` (`require_signoff` vs `require_approval`) say
+what is still needed. (policy-v1 allowed an approval to stand in for P4.)
 
 ## Incident lifecycle
 
@@ -145,21 +154,59 @@ python -m cyberrescue.core verify
 `roster.json` maps Band ids to roles:
 `{"agents": {"<band-agent-id>": "commander", …}, "humans": {"<band-user-id>": "ciso"}}`.
 
+## Phase 1b — Commander action gate
+
+The only WarRoom source change: `_record_action` in
+`agents/commander/tools.py` (the single execution point of `isolate_host`,
+`preserve_disk_image`, `wipe_host`, `notify_stakeholders`) first calls
+`cyberrescue.core.gate.check_commander_action`, imported lazily.
+
+| `CYBERRESCUE_GATE_MODE` | Behaviour |
+|---|---|
+| `shadow` (**default**) | The Core evaluates the action (pure policy evaluation) and logs the verdict. The Commander proceeds exactly as in WarRoom — same return value, same `actions_log.jsonl` line. No Core state changes, no approval consumed. |
+| `enforce` | The action goes through `CoreService.request_action`; the tool executes only on ALLOW, else returns `status: "blocked_by_policy"` and writes nothing to `actions_log.jsonl`. Fails closed: no bound incident, a Core error, or a missing `cyberrescue` package all block. |
+| anything else | treated as `shadow`, with a warning in the record (a typo never enables enforcement). |
+
+Other settings (operator-controlled, never taken from LLM text):
+
+| Variable | Meaning |
+|---|---|
+| `CYBERRESCUE_INCIDENT` | incident the Commander is working (id or alias; `INC-A/B/C` is opened in the Core automatically). Otherwise the most recent open Core incident on the target asset is used. |
+| `CYBERRESCUE_COMMANDER_REF` | Core actor ref of the Commander (default `warroom:commander`; use `band:<id>` to match an imported Band history). |
+| `CYBERRESCUE_GATE_LOG` | JSONL decision log (default `<repo>/cyberrescue_gate_log.jsonl`, gitignored). |
+| `CYBERRESCUE_DB_PATH` | Core database (default `<repo>/cyberrescue.db`, gitignored). |
+
+Each decision record contains: `ts`, `mode`, `incident`, `action`,
+`target_asset`, `commander_reason`, `outcome`, `verdict` (ALLOW/DENY),
+`would_allow`, `proceed`, `blocked`, `rules_evaluated`, `rule_results`,
+`unmet_rules`, `reason`, `signoff_request`, `signoffs_considered`,
+`approvals_considered` (with `valid_for_this_action`), `relied_on_event_uids`,
+`blocked_by_event_uids`, `policy_version`, `snapshot_hash`, `request_id`
+(enforce), `core_event_uid`, `warnings`, `error`. The same record is stored in
+the Core as a `GATE_DECISION` audit event (enforce mode additionally writes the
+full `ACTION_PROPOSED → POLICY_DECISION → ACTION_AUTHORIZED` chain).
+
+Note: with shadow as the default, a live Commander run creates
+`cyberrescue.db` and `cyberrescue_gate_log.jsonl` at the repo root (both
+gitignored). Unless an incident is bound, shadow verdicts read "DENY (P2: incident
+does not exist)" — accurate, since the Core has no record of it.
+
 ## Compatibility with WarRoom
 
-| Component | Effect of Phase 1a |
+| Component | Effect of Phase 1a / 1b |
 |---|---|
-| Triage, Threat Intel, Compliance, Commander | unchanged — the Core reads their protocol output offline |
+| Commander | Phase 1b: action tools consult the gate; shadow (default) leaves behaviour unchanged |
+| Triage, Threat Intel, Compliance | unchanged — the Core reads their protocol output offline |
 | Facilitator (`scripts/incident_driver.py`) | unchanged |
-| Band mode | unchanged; no WarRoom module imports `cyberrescue` (tested) |
+| Band mode | unchanged; only the Commander's tools reference `cyberrescue`, lazily (tested) |
 | `shared/schemas.py`, `protocol.md` | unchanged; `ProtocolMessage` is now used at runtime by `ingest.py` |
 | Mock environment | read-only (asset seeding, hold derivation) |
 | `actions_log.jsonl`, `regulatory_clocks.json` | untouched |
 | Original 77 tests | unmodified and passing |
 
-## Deliberately not in Phase 1a
+## Deliberately not in Phase 1
 
-Commander integration (Phase 1b, opt-in), Forensics agent, detection engine,
+Enforce mode as default, Forensics agent, detection engine,
 dashboard, executor/verification, SIEM/EDR integration, MITRE ATT&CK, risk
 scoring (Phase 1 only *records* risk values), approval UI (CLI only).
 Band `tool_call`/`tool_result` messages are skipped on import (a later phase can
