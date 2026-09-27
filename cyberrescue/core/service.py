@@ -28,6 +28,8 @@ from typing import Any
 from cyberrescue.core import db
 from cyberrescue.core.audit import AuditEvent, AuditLog, VerifyResult, utcnow
 from cyberrescue.core.catalog import get_action, match_actions_in_text
+from cyberrescue.core.evidence import EvidenceEnvelope, parse_envelope, prepare_record
+from cyberrescue.core.evidence_store import EvidenceStore, EvidenceVerifyResult
 from cyberrescue.core.holds import assess_holds
 from cyberrescue.core.models import (
     ActionRequest,
@@ -39,7 +41,10 @@ from cyberrescue.core.models import (
     ApprovalDecision,
     Asset,
     EventType,
+    EvidenceRecord,
+    EvidenceRelation,
     Finding,
+    FindingEvidence,
     Incident,
     LegalHold,
     LinkRelation,
@@ -63,6 +68,29 @@ class CoreError(ValueError):
     """Raised on an invalid Core request (unknown incident, bad arguments)."""
 
 
+class CollectorError(PermissionError):
+    """Raised when an actor that may not submit evidence tries to."""
+
+
+# Humans who may submit evidence (system collectors always may; agents never).
+COLLECTOR_HUMAN_ROLES = frozenset({"operator", "ciso", "dpo", "general_counsel"})
+# Upper bound on evidence ids one finding may cite in a single message.
+MAX_CITATIONS_PER_FINDING = 50
+
+
+@dataclass(frozen=True)
+class EvidenceIngestResult:
+    record: EvidenceRecord
+    duplicate: bool
+
+
+@dataclass
+class EvidenceBatchReport:
+    incident_id: str
+    ingested: list[str]
+    duplicates: list[str]
+
+
 @dataclass(frozen=True)
 class ActionOutcome:
     request: ActionRequest
@@ -82,6 +110,7 @@ class CoreService:
         self.config = config or PolicyConfig.from_env()
         self.engine = PolicyEngine(self.config)
         self.store = CoreStore(conn, clock)
+        self.evidence = EvidenceStore(conn, self.store.audit)
 
     @classmethod
     def open(cls, path: str | Path | None = None, **kwargs: Any) -> CoreService:
@@ -386,6 +415,87 @@ class CoreService:
             expires_at=(self.clock() + timedelta(minutes=ttl)).isoformat(),
             overrides_hold=overrides_hold, overrides_veto=overrides_veto,
             concerns_uid=concerns, source=source)
+
+    # --- evidence (Phase 2A) ----------------------------------------------------------
+    # Evidence is externally observed data. Only collectors — a SYSTEM actor, or
+    # a human with an operator/approver role — may submit it. LLM agents never
+    # can: they may only CITE existing evidence ids in their findings. Evidence
+    # is never parsed as protocol, never enters the policy snapshot, and has no
+    # path to approvals, actors or incident state.
+
+    def _collector(self, actor_id: str) -> Actor:
+        actor = self.store.get_actor(actor_id)
+        if actor is None:
+            raise CollectorError(f"actor {actor_id!r} is not registered with the Core")
+        if actor.kind == ActorKind.SYSTEM or (
+                actor.kind == ActorKind.HUMAN and actor.role in COLLECTOR_HUMAN_ROLES):
+            return actor
+        raise CollectorError(f"{actor.kind.value}/{actor.role} may not submit evidence "
+                             "(only collectors and human operators; agents may only cite)")
+
+    def _open_incident_for_evidence(self, incident_ref: str) -> Incident:
+        iid = self.store.resolve_incident(incident_ref)
+        if iid is None:
+            raise CoreError(f"no Core incident for {incident_ref!r}")
+        inc = self._incident(iid)
+        if inc.is_terminal:
+            raise CoreError(f"incident {iid} is {inc.status.value}: new evidence is rejected "
+                            "for closed incidents (the incident is not reopened)")
+        return inc
+
+    def _prepare_evidence(self, inc: Incident, envelope: EvidenceEnvelope | dict[str, Any],
+                          collector: Actor, now: datetime) -> dict[str, Any]:
+        env = parse_envelope(envelope)
+        asset = self.store.get_asset(env.host) if env.host else None
+        return prepare_record(env, incident_id=inc.id, ingested_by=collector.id,
+                              ingested_at=now, asset_id=asset.asset_id if asset else None)
+
+    def ingest_evidence(self, incident_ref: str, envelope: EvidenceEnvelope | dict[str, Any],
+                        *, collector_id: str, source: str = "collector") -> EvidenceIngestResult:
+        """Validate, seal and store one piece of evidence (idempotent by id)."""
+        collector = self._collector(collector_id)
+        inc = self._open_incident_for_evidence(incident_ref)
+        fields = self._prepare_evidence(inc, envelope, collector, self.clock())
+        record, duplicate = self.evidence.add(fields, source=source)
+        return EvidenceIngestResult(record=record, duplicate=duplicate)
+
+    def ingest_evidence_batch(self, incident_ref: str,
+                              envelopes: Iterable[EvidenceEnvelope | dict[str, Any]], *,
+                              collector_id: str,
+                              source: str = "collector") -> EvidenceBatchReport:
+        """All-or-nothing: every envelope is validated before any is stored."""
+        collector = self._collector(collector_id)
+        inc = self._open_incident_for_evidence(incident_ref)
+        now = self.clock()
+        prepared, errors = [], []
+        for i, env in enumerate(envelopes, start=1):
+            try:
+                prepared.append(self._prepare_evidence(inc, env, collector, now))
+            except ValueError as e:
+                errors.append(f"item {i}: {e}")
+        if errors:
+            raise CoreError("evidence batch rejected, nothing stored: " + " | ".join(errors[:20]))
+        report = EvidenceBatchReport(incident_id=inc.id, ingested=[], duplicates=[])
+        with db.transaction(self.conn):
+            for fields in prepared:
+                record, duplicate = self.evidence.add(fields, source=source)
+                (report.duplicates if duplicate else report.ingested).append(record.id)
+        return report
+
+    def get_evidence(self, evidence_id: str) -> EvidenceRecord | None:
+        return self.evidence.get(evidence_id)
+
+    def list_evidence(self, incident_ref: str, **filters: Any) -> list[EvidenceRecord]:
+        iid = self.store.resolve_incident(incident_ref)
+        if iid is None:
+            raise CoreError(f"no Core incident for {incident_ref!r}")
+        return self.evidence.list(iid, **filters)
+
+    def verify_evidence(self, incident_ref: str) -> EvidenceVerifyResult:
+        iid = self.store.resolve_incident(incident_ref)
+        if iid is None:
+            raise CoreError(f"no Core incident for {incident_ref!r}")
+        return self.evidence.verify(iid)
 
     # --- audit ----------------------------------------------------------------------
     def verify_audit(self, incident_id: str | None = None) -> VerifyResult:
