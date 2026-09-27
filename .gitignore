@@ -24,3 +24,5 @@ demo/
 cyberrescue*.db
 cyberrescue*.db-wal
 cyberrescue*.db-shm
+# CyberRescue Commander-gate decision log (shadow/enforce)
+cyberrescue_gate_log.jsonl

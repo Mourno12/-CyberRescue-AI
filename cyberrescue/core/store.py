@@ -226,6 +226,14 @@ class CoreStore:
                                   actor_id=opened_by, source=source, payload={"alias": alias})
         return inc
 
+    def open_incidents_for_asset(self, asset_id: str) -> list[str]:
+        """Non-terminal incidents whose primary asset is ``asset_id``, newest first."""
+        return [r["id"] for r in self._all(
+            "SELECT id FROM incidents WHERE primary_asset_id = ? AND status NOT IN (?, ?) "
+            "ORDER BY updated_at DESC, id DESC",
+            (asset_id, IncidentStatus.RESOLVED.value,
+             IncidentStatus.CLOSED_FALSE_POSITIVE.value))]
+
     def aliases_of(self, incident_id: str) -> list[str]:
         return [r["alias"] for r in self._all(
             "SELECT alias FROM incident_aliases WHERE incident_id = ? ORDER BY alias",
