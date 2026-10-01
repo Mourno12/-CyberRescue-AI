@@ -234,11 +234,12 @@ class PeriodicOutbound(Rule):
                             "connections": len(evs)}),
                 "external_destination": ConditionResult(id="external_destination",
                                                         matched=True, detail={"ip": dst})}
-            reason, extra = self._allowlisted(view, dst)
+            reason, extra, allowlisted_as = self._allowlisted(view, dst)
             if reason:
                 out.append(self.observation(
                     view, kind="suppressed", key=[host, dst, port], primary_host=host,
-                    evidence_ids=[*(e.id for e in evs), *extra], entities=entities,
+                    evidence_ids=[*(e.id for e in evs), *extra],
+                    entities=entities | {"allowlisted_as": allowlisted_as},
                     matched=matched,
                     reason=f"periodic outbound to {dst}:{port} every ~{period}s suppressed - "
                            f"{reason}"))
@@ -255,12 +256,14 @@ class PeriodicOutbound(Rule):
         return out
 
     @staticmethod
-    def _allowlisted(view: EvidenceView, dst: str) -> tuple[str | None, list[str]]:
+    def _allowlisted(view: EvidenceView,
+                     dst: str) -> tuple[str | None, list[str], str | None]:
+        """(reason, DNS evidence ids, the allowlisted ip/name) or (None, [], None)."""
         if view.intel.allowlisted(view.intel.lookup_ip(dst)):
-            return f"{dst} is allowlisted (threat intel status=benign)", []
+            return f"{dst} is allowlisted (threat intel status=benign)", [], dst
         for name, ids in view.dns.names(dst).items():
             if view.intel.allowlisted(view.intel.lookup_domain(name)):
                 return (f"{dst} was resolved from {name} (DNS evidence {', '.join(ids[:3])}"
                         f"{'...' if len(ids) > 3 else ''}), which is allowlisted "
-                        "(threat intel status=benign)", ids)
-        return None, []
+                        "(threat intel status=benign)", ids, name)
+        return None, [], None
