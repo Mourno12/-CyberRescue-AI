@@ -91,10 +91,10 @@ class ThreatIntel:
     """Exact-match indicator lookup. Active indicators detect; benign ones allowlist."""
 
     def __init__(self, indicators: Iterable[dict[str, Any]]) -> None:
-        raw = list(indicators)
-        self.fingerprint = hashlib.sha256(canonical_json(raw).encode()).hexdigest()
+        items = list(indicators)
+        self.fingerprint = hashlib.sha256(canonical_json(items).encode()).hexdigest()
         self._by_key: dict[tuple[str, str], Indicator] = {}
-        for item in raw:
+        for item in items:
             t = str(item.get("type", ""))
             norm = {"ipv4": normalize_ip, "ipv6": normalize_ip, "domain": normalize_domain,
                     "sha256": normalize_sha256}.get(t)
