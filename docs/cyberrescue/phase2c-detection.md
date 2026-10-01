@@ -174,7 +174,7 @@ deliberately reports no single accuracy number. Instead it gives:
 
 | | Stages | Malicious evidence supported | Unexpected findings | Facts |
 |---|---|---|---|---|
-| A | 5/5 | 58/58 | 0 | 15 match, 1 not evaluated (`lateral_code_execution_observed`) |
+| A | 5/5 | 58/58 | 0 | 15 match, 1 not evaluated (`lateral_code_execution_observed`); Phase 3 closes this through gap G1, giving 16/16 |
 | B | — | 0/0 | 0 | 7/7 match |
 | C | 4/4 | 5/6 (6/6 including context) | 0 | 10/10 match |
 
@@ -212,3 +212,9 @@ python -m cyberrescue.evaluation run [--scenario A] [--json]
   signing is future work.
 * A persisted finding's id and creation time come from the Core (uuid4 and clock). The
   determinism guarantee covers the `DetectionReport` and its `detection_id`.
+
+## Next: Phase 3
+
+**Implemented.** See [phase3-investigation.md](phase3-investigation.md). The read-only
+Investigation Layer consumes these detections and findings: it builds timelines, entity graphs,
+scope, forensic gaps and verifiable case exports.

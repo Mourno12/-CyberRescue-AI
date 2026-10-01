@@ -139,7 +139,9 @@ head hash in the exported report).
   `INC-[ABC]` regexes can never misread them.
 * `INC-A`, `INC-B`, `INC-C` are aliases of `INC-A-2026-0039`, `INC-B-2026-0041`,
   `INC-C-2026-0042`; decorated references (`INC-C-2026-[BlackHaze…]`) resolve.
-* WarRoom's own regexes are unchanged in Phase 1 (planned for Phase 3).
+* WarRoom's own regexes are unchanged in Phase 1. This was originally planned for
+  Phase 3; Phase 3 became the Investigation Layer, and the regex work is deferred
+  to its own phase (decision Q4).
 
 ## CLI walkthrough
 
