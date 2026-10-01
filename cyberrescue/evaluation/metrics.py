@@ -17,7 +17,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from cyberrescue.evaluation.expectations import FACT_EXTRACTORS, STAGE_TYPES
+from cyberrescue.evaluation.expectations import (
+    CASE_FACT_EXTRACTORS,
+    FACT_EXTRACTORS,
+    STAGE_TYPES,
+)
 from cyberrescue.evaluation.harness import ScenarioRun
 
 
@@ -114,10 +118,13 @@ def evaluate(run: ScenarioRun) -> ScenarioEvaluation:
     ev.observations = sorted((o.rule_id, o.kind) for o in rep.observations)
     for name, expected in sorted(gt.facts.items()):
         extractor = FACT_EXTRACTORS.get(name)
-        if extractor is None:
+        if extractor is not None:
+            observed = extractor(rep, run.data_classes)
+        elif name in CASE_FACT_EXTRACTORS:
+            observed = CASE_FACT_EXTRACTORS[name](run)
+        else:
             ev.facts.append(FactResult(name, expected, None, "not_evaluated"))
             continue
-        observed = extractor(rep, run.data_classes)
         ev.facts.append(FactResult(name, expected, observed,
                                    "match" if observed == expected else "mismatch"))
     return ev

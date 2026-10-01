@@ -63,8 +63,14 @@ def test_facts_match_or_are_explicitly_not_evaluated(evals, key):
     assert set(statuses.values()) <= {"match", "not_evaluated"}
 
 
-def test_unevaluable_facts_are_reported_not_passed(evals):
-    assert facts(evals["A"])["lateral_code_execution_observed"] == "not_evaluated"
+def test_unevaluable_facts_are_reported_not_passed(evals, runs):
+    # Phase 3 (Q6): closed through the investigation layer's gap G1.
+    assert facts(evals["A"])["lateral_code_execution_observed"] == "match"
+    run = runs["A"]
+    unknown = run.ground_truth.model_copy(update={
+        "facts": run.ground_truth.facts | {"attacker_motive": "money"}})
+    ev = evaluate(run.__class__(**{**run.__dict__, "ground_truth": unknown}))
+    assert facts(ev)["attacker_motive"] == "not_evaluated"
 
 
 def test_metrics_detect_a_regression_against_labels(runs):

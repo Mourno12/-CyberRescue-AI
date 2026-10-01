@@ -6,6 +6,8 @@
 * ``FACT_EXTRACTORS`` — derive the value of a ground-truth ``facts`` key from a
   detection report, so the facts can be checked. Keys without an extractor are
   reported as "not evaluated", never silently passed.
+* ``CASE_FACT_EXTRACTORS`` - facts derived from a ``ScenarioRun``'s
+  investigation results (scope, gaps) rather than the detection report.
 """
 
 from __future__ import annotations
@@ -89,4 +91,17 @@ FACT_EXTRACTORS: dict[str, FactExtractor] = {
     "initial_vector": lambda r, c: "phishing_attachment" if any(
         cond.id == "delivery_context" and cond.matched
         for d in _det(r, "CORR-001") for cond in d.conditions) else None,
+}
+
+
+# Facts that need the investigation layer (scope + gaps), not just the report.
+# Phase 3 (Q6): lateral code execution is "observed" only if some accessed host
+# lacks a G1 gap, i.e. activity by the account there IS in the evidence.
+def _lateral_code_execution(run) -> bool:
+    from cyberrescue.evaluation.investigation import lateral_code_execution_observed
+    return lateral_code_execution_observed(run.accessed_hosts, list(run.gaps))
+
+
+CASE_FACT_EXTRACTORS: dict[str, Callable[[Any], Any]] = {
+    "lateral_code_execution_observed": _lateral_code_execution,
 }

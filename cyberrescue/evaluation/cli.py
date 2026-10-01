@@ -1,8 +1,9 @@
-"""python -m cyberrescue.evaluation run [--scenario A] [--json]
+"""python -m cyberrescue.evaluation run [--scenario A] [--json] [--investigation]
 
 Runs each scenario in a temporary Core (the operational database is never
 touched) and prints per-scenario metrics. Exit status 1 if any scenario has an
-unexpected finding, a missed stage, or a fact mismatch.
+unexpected finding, a missed stage, a fact mismatch, or (with --investigation)
+a case-check mismatch.
 """
 
 from __future__ import annotations
@@ -46,13 +47,26 @@ def _print(ev: ScenarioEvaluation) -> None:
 def _cmd_run(args) -> int:
     keys = [args.scenario.upper()] if args.scenario else list(CATALOG)
     results = [evaluate(run_scenario(k)) for k in keys]
+    cases = []
+    if args.investigation:
+        from cyberrescue.evaluation.investigation import evaluate_case, run_case
+        cases = [evaluate_case(*run_case(k)) for k in keys]
     if args.json:
-        print(json.dumps([r.to_dict() for r in results], sort_keys=True, indent=2))
+        print(json.dumps({"detection": [r.to_dict() for r in results],
+                          "investigation": [c.to_dict() for c in cases]}
+                         if args.investigation else [r.to_dict() for r in results],
+                         sort_keys=True, indent=2))
     else:
         for r in results:
             _print(r)
+        for c in cases:
+            print(f"== Investigation case {c.case_id} (scenario {c.scenario})")
+            for ch in c.checks:
+                print(f"   check {ch.check:<30} {ch.status:<13} expected={ch.expected!r} "
+                      f"observed={ch.observed!r}")
     bad = [r.scenario for r in results if r.unexpected_findings or r.missed_stages
            or any(f.status == "mismatch" for f in r.facts)]
+    bad += [c.scenario for c in cases if any(ch.status == "mismatch" for ch in c.checks)]
     if bad:
         print(f"[evaluation] attention needed: {', '.join(bad)}", file=sys.stderr)
     return 1 if bad else 0
@@ -65,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="evaluate one or all scenarios")
     r.add_argument("--scenario", default=None)
     r.add_argument("--json", action="store_true")
+    r.add_argument("--investigation", action="store_true",
+                   help="also evaluate the Phase 3 investigation case")
     r.set_defaults(fn=_cmd_run)
     args = p.parse_args(argv)
     try:
