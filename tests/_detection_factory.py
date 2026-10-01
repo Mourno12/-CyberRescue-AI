@@ -145,3 +145,21 @@ class Evidence:
         if group:
             data["group.name"] = group
         return self.add(when, "log", str(code), host=host, user=actor, data=data)
+
+
+def scenario_core(path, keys=("A", "B", "C"), **svc_kwargs):
+    """A file-backed Core with the committed scenarios ingested into their
+    catalogue incidents. Returns (svc, collector)."""
+    from cyberrescue.core.service import CoreService
+    from cyberrescue.telemetry.catalog import CATALOG
+    from cyberrescue.telemetry.importer import import_scenario
+    from shared.mock_data import load_alert
+    svc = CoreService.open(path, **svc_kwargs)
+    svc.seed_assets_from_mock()
+    collector = svc.register_actor("system", "collector", "synthetic", "collector:synthetic")
+    for key in keys:
+        alert = load_alert(CATALOG[key].incident_alias)
+        svc.open_incident(alert["incident_id"], title=alert["title"],
+                          primary_asset_id=alert["asset_id"])
+        import_scenario(svc, key, collector_id=collector.id)
+    return svc, collector
