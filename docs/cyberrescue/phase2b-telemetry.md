@@ -200,7 +200,8 @@ incident.
 | `tests/test_telemetry_cli.py` | Every CLI command and its error exits |
 | `tests/test_telemetry_security.py` | Hostile telemetry is inert; ground-truth isolation |
 
-## Next: Phase 2C (not started)
+## Next: Phase 2C
 
-Phase 2C will add deterministic detection rules over `list_evidence`. It will measure them
-against `ground_truth/` from evaluation code that runs outside the Core.
+**Implemented.** See [phase2c-detection.md](phase2c-detection.md). Deterministic detection
+rules run over `list_evidence`. `cyberrescue/evaluation/`, which runs outside the Core,
+measures them against `ground_truth/`.
