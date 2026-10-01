@@ -179,6 +179,12 @@ hostile log line).
 
 ## Phase 2B: connecting synthetic INC-C telemetry
 
+> **Implemented**: see [phase2b-telemetry.md](phase2b-telemetry.md). The
+> telemetry was committed as deterministic datasets for all three incidents
+> under `datasets/cyberrescue/synthetic/` (scenario A = INC-C), adapted through
+> `cyberrescue/telemetry/`, rather than as a single test fixture. The plan
+> below is kept as originally written.
+
 * A new `tests/fixtures/cyberrescue/inc_c_telemetry.jsonl` (synthetic) will
   hold envelopes timestamped just before the alert's `detected_utc`
   `2026-06-13T14:07:22Z`, with `host` values from the asset inventory
