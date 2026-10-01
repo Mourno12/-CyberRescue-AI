@@ -1,4 +1,4 @@
-"""Build and verify an investigation Case — read-only and deterministic.
+"""Build and verify an investigation Case - read-only and deterministic.
 
 ``build_case`` assembles every component for one incident from a
 ``ReadOnlyCore``. Nothing depends on the wall clock: ``as_of`` is the timestamp

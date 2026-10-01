@@ -25,7 +25,7 @@ every evidence record that shows the same relationship and cites all of them.
 An address that the evidence-derived address book resolves to exactly one host
 is represented by that host. Size is bounded (nodes/edges); truncation is
 reported, never silent. ``find_path`` treats edges as undirected: a path shows
-that entities are CONNECTED through evidence, not that one caused the other —
+that entities are CONNECTED through evidence, not that one caused the other -
 use the timeline for sequence.
 """
 

@@ -1,4 +1,4 @@
-"""Investigation case model — frozen, canonical, trust-labelled.
+"""Investigation case model - frozen, canonical, trust-labelled.
 
 Every string that originates in evidence content (a command line, a path, a
 user agent, a process name, an agent's free text) is wrapped in ``Untrusted``,

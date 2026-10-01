@@ -1,7 +1,7 @@
 """Reconcile non-detector findings (WarRoom agents, humans) with evidence.
 
-This measures CITATION COVERAGE only — whether a finding's statements are tied
-to evidence ids — not whether the statements are true (that would need
+This measures CITATION COVERAGE only - whether a finding's statements are tied
+to evidence ids - not whether the statements are true (that would need
 semantic analysis, out of scope for a deterministic layer).
 
     evidence-backed   >= 1 valid supporting citation and no rejected citations

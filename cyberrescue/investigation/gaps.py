@@ -43,7 +43,7 @@ def _activity_after(view: EvidenceView, host: str, account: str, after) -> list[
 def derive_gaps(view: EvidenceView, report: DetectionReport, scope: Scope,
                 claims: Iterable[ClaimReconciliation] = ()) -> list[Gap]:
     gaps: list[Gap] = []
-    # G1 — successful remote logons into accessed hosts (one gap per logon, listing
+    # G1 - successful remote logons into accessed hosts (one gap per logon, listing
     # every detection that cites it).
     logons: dict[str, set[str]] = {}
     for d in report.detections:
@@ -63,7 +63,7 @@ def derive_gaps(view: EvidenceView, report: DetectionReport, scope: Scope,
             f"{e.observed_at}; no endpoint activity by this account on that host is "
             "observed afterwards. Whether code ran there cannot be determined from the "
             "evidence.", host=e.host, evidence_ids=[eid], refs=logons[eid]))
-    # G2 — indicator contact without an observed outcome.
+    # G2 - indicator contact without an observed outcome.
     for d in report.detections:
         if d.rule_id == "IOC-002" and d.entities.get("outcome") == "attempted":
             gaps.append(_gap(
@@ -73,21 +73,21 @@ def derive_gaps(view: EvidenceView, report: DetectionReport, scope: Scope,
                 host=d.primary_host, evidence_ids=d.supporting_evidence_ids,
                 refs=[d.detection_id]))
     for o in report.observations:
-        # G3 — uncorroborated vendor alerts.
+        # G3 - uncorroborated vendor alerts.
         if o.kind == "uncorroborated_alert":
             gaps.append(_gap(
                 "G3", "Vendor alert not corroborated",
                 f"A vendor alert on {safe_token(o.primary_host)} is not supported by any "
                 "detection; it is a sensor's opinion and needs analyst review.",
                 host=o.primary_host, evidence_ids=o.evidence_ids, refs=[o.observation_id]))
-        # G5 — partial chains.
+        # G5 - partial chains.
         elif o.kind == "partial_match":
             gaps.append(_gap(
                 "G5", f"Partial {o.rule_id} chain",
                 f"{o.rule_id} matched only partially on {safe_token(o.primary_host)}; the "
                 "remaining conditions are not observed (see the observation's reason).",
                 host=o.primary_host, evidence_ids=o.evidence_ids, refs=[o.observation_id]))
-    # G4 — in-scope hosts without endpoint telemetry.
+    # G4 - in-scope hosts without endpoint telemetry.
     endpoint_hosts = {e.host for e in view.events if e.kind in ENDPOINT_KINDS}
     for host in sorted({*scope.compromised_hosts, *scope.accessed_hosts,
                         *scope.targeted_hosts} - endpoint_hosts):
@@ -97,7 +97,7 @@ def derive_gaps(view: EvidenceView, report: DetectionReport, scope: Scope,
             f"{safe_token(host)} is in scope but has no process/file telemetry in the "
             f"evidence ({len(seen)} other record(s)); activity on it cannot be assessed.",
             host=host, evidence_ids=seen[:20]))
-    # G6 — agent findings not backed by evidence.
+    # G6 - agent findings not backed by evidence.
     for c in claims:
         if c.status != "evidence-backed":
             gaps.append(_gap(

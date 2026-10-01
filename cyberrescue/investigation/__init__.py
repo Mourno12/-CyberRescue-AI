@@ -1,4 +1,4 @@
-"""CyberRescue Investigation Layer (Phase 3) — deterministic, read-only forensics.
+"""CyberRescue Investigation Layer (Phase 3) - deterministic, read-only forensics.
 
 For one incident it builds a reproducible Case from the Core: an annotated,
 condensed timeline; an entity graph with pivots; the scope; forensic gaps;

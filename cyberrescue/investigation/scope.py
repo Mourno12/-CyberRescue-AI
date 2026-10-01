@@ -1,11 +1,11 @@
 """Scope: what the evidence shows is affected. A description, never a
-recommendation — no actions are proposed.
+recommendation - no actions are proposed.
 
-* compromised — primary host of an execution / persistence / recovery-inhibition /
+* compromised - primary host of an execution / persistence / recovery-inhibition /
   impact / multi-stage detection
-* accessed    — successful remote authentication (LAT-001 succeeded hosts,
+* accessed    - successful remote authentication (LAT-001 succeeded hosts,
   AUTH-001 targets), not already compromised
-* targeted    — remote authentication attempts that never succeeded
+* targeted    - remote authentication attempts that never succeeded
 """
 
 from __future__ import annotations
