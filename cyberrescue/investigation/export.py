@@ -27,19 +27,23 @@ FORMATS = ("json", "md", "html")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
-def _text(value: Any) -> str:
+def plain_text(value: Any) -> str:
+    """Single-line, ASCII-only, control-character-free text of any value (used
+    by every renderer and the CLI, so attacker text can neither inject markup
+    nor terminal escape sequences)."""
     if isinstance(value, Untrusted):
         value = value.untrusted
     elif isinstance(value, dict) and set(value) == {"untrusted"}:
         value = value["untrusted"]
     s = "" if value is None else str(value)
-    return _CTRL.sub("?", s.replace("\r\n", "\n")).replace("\n", " \\n ")
+    s = _CTRL.sub("?", s.replace("\r\n", "\n")).replace("\n", " \\n ")
+    return s.encode("ascii", "backslashreplace").decode("ascii")
 
 
 # --- Markdown --------------------------------------------------------------------
 
 def md_code(value: Any) -> str:
-    s = _text(value)
+    s = plain_text(value)
     if s == "":
         return "-"
     longest = max((len(m) for m in re.findall(r"`+", s)), default=0)
@@ -136,7 +140,7 @@ _STYLE = ("body{font-family:system-ui,sans-serif;margin:24px;max-width:1100px;co
 def h(value: Any) -> str:
     cls = ' class="untrusted"' if isinstance(value, Untrusted) or (
         isinstance(value, dict) and set(value) == {"untrusted"}) else ""
-    s = _text(value)
+    s = plain_text(value)
     return f"<code{cls}>{html.escape(s, quote=True)}</code>" if s else "-"
 
 
