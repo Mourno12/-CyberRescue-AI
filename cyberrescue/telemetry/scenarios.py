@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from cyberrescue.core.ids import LEGACY_ALIASES
+from cyberrescue.telemetry.catalog import CATALOG, ScenarioInfo, scenario_info
 from cyberrescue.telemetry.ground_truth import (
     AttackStep,
     BenignExplanation,
@@ -673,35 +673,30 @@ def build_scenario_c(tl: Timeline) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class ScenarioSpec:
-    key: str
-    dataset: str
-    incident_alias: str
-    title: str
+    """A catalogue entry (label-free) plus how to generate it."""
+
+    info: ScenarioInfo
     seed: int
     start: datetime
     end: datetime
     builder: Callable[[Timeline], dict[str, Any]]
 
-    @property
-    def incident_id(self) -> str:
-        return LEGACY_ALIASES[self.incident_alias]
+    key = property(lambda self: self.info.key)
+    dataset = property(lambda self: self.info.dataset)
+    incident_alias = property(lambda self: self.info.incident_alias)
+    incident_id = property(lambda self: self.info.incident_id)
+    title = property(lambda self: self.info.title)
 
 
 SCENARIOS: dict[str, ScenarioSpec] = {s.key: s for s in (
-    ScenarioSpec("A", "scenario-a", "INC-C", "Ransomware on the customer database",
-                 20260042, _at("13:30:00"), _at("14:10:00"), build_scenario_a),
-    ScenarioSpec("B", "scenario-b", "INC-B", "Suspected beaconing from the web frontend",
-                 20260041, _at("11:00:00"), _at("11:50:00"), build_scenario_b),
-    ScenarioSpec("C", "scenario-c", "INC-A", "Commodity trojan on an engineering workstation",
-                 20260039, _at("08:55:00"), _at("09:25:00"), build_scenario_c),
+    ScenarioSpec(CATALOG["A"], 20260042, _at("13:30:00"), _at("14:10:00"), build_scenario_a),
+    ScenarioSpec(CATALOG["B"], 20260041, _at("11:00:00"), _at("11:50:00"), build_scenario_b),
+    ScenarioSpec(CATALOG["C"], 20260039, _at("08:55:00"), _at("09:25:00"), build_scenario_c),
 )}
 
 
 def get_scenario(key: str) -> ScenarioSpec:
-    k = (key or "").strip().upper().removeprefix("SCENARIO-").removeprefix("SCENARIO_")
-    if k not in SCENARIOS:
-        raise KeyError(f"unknown scenario {key!r}; choose from {', '.join(SCENARIOS)}")
-    return SCENARIOS[k]
+    return SCENARIOS[scenario_info(key).key]
 
 
 def build(key: str) -> tuple[list[TelemetryEvent], GroundTruth]:

@@ -21,25 +21,17 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from cyberrescue.telemetry.catalog import (  # noqa: F401  (re-exported)
+    DEFAULT_ROOT,
+    ground_truth_relpath,
+    telemetry_path,
+    telemetry_relpath,
+)
 from cyberrescue.telemetry.ground_truth import GROUND_TRUTH_SCHEMA
-from cyberrescue.telemetry.scenarios import GENERATOR_VERSION, SCENARIOS, ScenarioSpec, build
+from cyberrescue.telemetry.scenarios import GENERATOR_VERSION, SCENARIOS, build
 from cyberrescue.telemetry.schema import TELEMETRY_SCHEMA
 
-REPO = Path(__file__).resolve().parents[2]
-DEFAULT_ROOT = REPO / "datasets" / "cyberrescue" / "synthetic"
 MANIFEST = "manifest.json"
-
-
-def telemetry_relpath(spec: ScenarioSpec) -> str:
-    return f"telemetry/{spec.dataset}.jsonl"
-
-
-def ground_truth_relpath(spec: ScenarioSpec) -> str:
-    return f"ground_truth/{spec.dataset}.json"
-
-
-def telemetry_path(key: str, root: str | Path | None = None) -> Path:
-    return Path(root or DEFAULT_ROOT) / telemetry_relpath(SCENARIOS[key.upper()])
 
 
 def _json_bytes(obj: Any, *, indent: int | None = None) -> bytes:
@@ -55,8 +47,8 @@ def render() -> dict[str, bytes]:
         tel = b"".join(_json_bytes(e.model_dump(mode="json", exclude_none=True))
                        for e in events)
         truth = _json_bytes(gt.model_dump(mode="json"), indent=2)
-        files[telemetry_relpath(spec)] = tel
-        files[ground_truth_relpath(spec)] = truth
+        files[telemetry_relpath(spec.info)] = tel
+        files[ground_truth_relpath(spec.info)] = truth
         entries.append({
             "scenario": spec.key,
             "dataset": spec.dataset,
@@ -66,14 +58,14 @@ def render() -> dict[str, bytes]:
             "seed": spec.seed,
             "window": {"start": spec.start.isoformat(), "end": spec.end.isoformat()},
             "telemetry": {
-                "path": telemetry_relpath(spec),
+                "path": telemetry_relpath(spec.info),
                 "sha256": hashlib.sha256(tel).hexdigest(),
                 "events": len(events),
                 "by_category": dict(sorted(Counter(e.category.value for e in events).items())),
                 "by_sensor": dict(sorted(Counter(e.sensor for e in events).items())),
             },
             "ground_truth": {
-                "path": ground_truth_relpath(spec),
+                "path": ground_truth_relpath(spec.info),
                 "sha256": hashlib.sha256(truth).hexdigest(),
                 "evaluation_only": True,
             },
