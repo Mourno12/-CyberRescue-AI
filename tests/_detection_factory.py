@@ -163,3 +163,18 @@ def scenario_core(path, keys=("A", "B", "C"), **svc_kwargs):
                           primary_asset_id=alert["asset_id"])
         import_scenario(svc, key, collector_id=collector.id)
     return svc, collector
+
+
+def investigated_core(path, keys=("A", "B", "C")):
+    """A Core with scenarios ingested and detections persisted for each incident
+    (via the explicit publisher), closed again so it can be opened read-only."""
+    from cyberrescue.detection.engine import detect
+    from cyberrescue.detection.publisher import persist
+    from cyberrescue.telemetry.catalog import CATALOG
+    svc, _ = scenario_core(path, keys=keys)
+    detector = svc.register_actor("system", "detector", "engine", "detector:test")
+    for key in keys:
+        ref = CATALOG[key].incident_alias
+        persist(svc, ref, detect(svc, ref), detector_id=detector.id)
+    svc.conn.close()
+    return path
