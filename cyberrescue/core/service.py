@@ -211,7 +211,8 @@ class CoreService:
                        severity: str | None = None, claims: Iterable[str] = (),
                        evidence_ids: Iterable[str] = (),
                        evidence_relation: EvidenceRelation | str = EvidenceRelation.SUPPORTS,
-                       source_uid: str | None = None, source: str = "core") -> Finding:
+                       source_uid: str | None = None, source: str = "core",
+                       claim_kind: str = "protocol_claim") -> Finding:
         """Record a finding, the statements (claims) written in it, and the
         evidence it cites.
 
@@ -221,6 +222,9 @@ class CoreService:
         evidence of the SAME incident; any invalid id rejects the whole call
         (strict programmatic API — see ``cite_evidence_from_message`` for the
         audited, lenient path used for agent messages).
+
+        ``claim_kind`` labels the stored claims (default ``protocol_claim``;
+        the Phase 2C detection publisher uses ``detection``).
         """
         inc = self._incident(incident_id)
         ids = list(dict.fromkeys(evidence_ids))
@@ -233,7 +237,7 @@ class CoreService:
             f = self.store.add_finding(incident_id, author_actor_id=author.id, summary=summary,
                                        severity=severity, source_uid=source_uid, source=source)
             for item in claims:
-                self.store.add_claim(incident_id, content=str(item), kind="protocol_claim",
+                self.store.add_claim(incident_id, content=str(item), kind=claim_kind,
                                      finding=f, actor_id=author.id, source_uid=source_uid,
                                      source=source)
             for record in records:
