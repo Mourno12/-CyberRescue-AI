@@ -3,7 +3,7 @@
 Field contract (Windows Security events, ECS-style): 4720 account created and
 4728/4732/4756 member added, each with ``user.target.name`` (the affected
 account) and, for membership changes, ``group.name``; ``user.name`` is the
-actor. NOTE: none of the Phase 2B scenarios contains such events — this rule is
+actor. NOTE: none of the Phase 2B scenarios contains such events - this rule is
 covered by unit fixtures only (decision D1 = a).
 """
 
@@ -62,7 +62,7 @@ class NewPrivilegedAccount(Rule):
                     primary_host=add.host, evidence_ids=[add.id],
                     entities={"account": account, "group": group, "actor": add.user},
                     reason=f"existing account {safe_token(account)} added to privileged "
-                           f"group {group!r}; no account creation in the window — review, "
+                           f"group {group!r}; no account creation in the window - review, "
                            "not a finding"))
                 continue
             c = origin[-1]

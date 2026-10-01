@@ -1,7 +1,7 @@
 """Pure, deterministic predicates over structured evidence values.
 
-Every function takes plain values (paths, command lines, addresses) — never a
-raw log line — and returns a fact. No I/O, no clock, no state.
+Every function takes plain values (paths, command lines, addresses) - never a
+raw log line - and returns a fact. No I/O, no clock, no state.
 """
 
 from __future__ import annotations
@@ -46,6 +46,9 @@ DB_DUMP_TOOLS = frozenset({"pg_dump.exe", "pg_dumpall.exe", "mysqldump.exe", "sq
                            "bcp.exe", "expdp.exe", "mongodump.exe"})
 ADMIN_PORTS = frozenset({135, 139, 445, 3389, 5985, 5986})
 ARCHIVE_EXTENSIONS = frozenset({"zip", "rar", "7z", "iso", "img", "cab"})
+SENSITIVE_DATA_CLASSES = frozenset({"customer_pii", "financial", "credentials"})
+# Threat-intel confidence vocabulary (ioc_db.json) -> detection confidence.
+CONFIDENCES_FROM_INTEL = {"high": "high", "medium": "medium", "low": "low"}
 
 # Not "is_global": synthetic data uses documentation ranges (RFC 5737) for the
 # internet, so "internal" means RFC 1918 / loopback / link-local / CGNAT / ULA.

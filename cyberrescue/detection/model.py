@@ -1,17 +1,17 @@
-"""Detection result types — frozen, explainable, deterministic.
+"""Detection result types - frozen, explainable, deterministic.
 
 A rule turns evidence into one of two outputs:
 
-* ``Detection`` — every *required* condition matched and the rule's minimum
+* ``Detection`` - every *required* condition matched and the rule's minimum
   corroboration was met. Only detections may become findings, and a detection
   cannot exist without supporting evidence ids.
-* ``Observation`` — something worth showing an analyst that is NOT a finding:
+* ``Observation`` - something worth showing an analyst that is NOT a finding:
   an indicator observed without malicious context, an uncorroborated vendor
   alert, an allowlisted (suppressed) candidate, or a partial chain. Observations
   are reported, never persisted.
 
 Every result lists every condition its rule declares, matched or not, with the
-evidence ids behind it — the explanation is the data, not prose. Identifiers are
+evidence ids behind it - the explanation is the data, not prose. Identifiers are
 content-derived (no clock, no randomness): identical evidence yields identical
 results.
 """

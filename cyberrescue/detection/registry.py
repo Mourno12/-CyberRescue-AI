@@ -100,7 +100,7 @@ class Rule(ABC):
                 entities=entities, matched=matched, evidence_ids=(*sup, *ctx),
                 reason=f"{spec.rule_id}: required conditions met but only "
                        f"{len(corroborated)}/{spec.min_corroboration} corroborating "
-                       "condition(s) matched — not a finding")
+                       "condition(s) matched - not a finding")
         if confidence is None:
             confidence = raise_confidence(spec.base_confidence, len(corroborated))
             confidence_basis = (f"base {spec.base_confidence} + {len(corroborated)}/"

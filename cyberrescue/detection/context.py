@@ -7,15 +7,15 @@ is deliberately absent, so no rule can read, parse or act on it.
 The view is bound to exactly one incident (taken from the Core rows, never from
 evidence content) and refuses records of any other incident.
 
-Derived context, all from evidence or reference data — never from ground truth:
+Derived context, all from evidence or reference data - never from ground truth:
 
-* ``AddressBook`` — ip -> host, learned only from events where the address is
+* ``AddressBook`` - ip -> host, learned only from events where the address is
   unambiguously the host's own (EDR ``network_connect`` / NetFlow ``flow``
   initiator / DNS client). Auth events never contribute. An ip claimed by two
   hosts stays unresolved.
-* ``DnsMap`` — ip -> names, from ``dns.answers``.
-* ``AssetContext`` — the Core's asset inventory (data classes, criticality).
-* ``ThreatIntel`` — the mock IOC database; exact matching on normalised values;
+* ``DnsMap`` - ip -> names, from ``dns.answers``.
+* ``AssetContext`` - the Core's asset inventory (data classes, criticality).
+* ``ThreatIntel`` - the mock IOC database; exact matching on normalised values;
   ``status: benign`` entries form the allowlist.
 """
 

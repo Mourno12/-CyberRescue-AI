@@ -7,7 +7,7 @@ Deterministic, offline, explainable detection over Phase 2A evidence:
         -> (explicit operator step) FindingPublisher -> record_finding
 
 No LLM, no clock, no randomness. Detection reads evidence and reference data
-(asset inventory, mock IOC database) only — never ground truth — and has no
+(asset inventory, mock IOC database) only - never ground truth - and has no
 path to approvals, sign-offs, actors, incident state, policy or the Commander
 gate. A detection is a statement backed by evidence ids, never an authorization.
 """
