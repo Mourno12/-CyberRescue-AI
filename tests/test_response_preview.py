@@ -34,7 +34,7 @@ def as_of(dbp):
 
 def previewer(path, as_of):
     with open_readonly(path) as ro:
-        return Previewer(readonly_snapshot(ro, INC, as_of))
+        return Previewer(readonly_snapshot(ro, INC, as_of), as_of=as_of)
 
 
 def test_readonly_snapshot_equals_the_core_snapshot(dbp, as_of):
@@ -108,9 +108,11 @@ def test_preview_reflects_a_human_approval_valid_at_as_of(dbp, as_of, tmp_path):
     svc.conn.close()
     with open_readonly(copy) as ro:
         later = build_case(ro, "INC-C").as_of           # the approval moved as_of
-        now = Previewer(readonly_snapshot(ro, INC, later)).preview("wipe_host", "srv-db-01")
-        expired = Previewer(readonly_snapshot(ro, INC, (t0 + timedelta(hours=2)).isoformat())
-                            ).preview("wipe_host", "srv-db-01")
+        now = Previewer(readonly_snapshot(ro, INC, later), as_of=later).preview(
+            "wipe_host", "srv-db-01")
+        late = (t0 + timedelta(hours=2)).isoformat()
+        expired = Previewer(readonly_snapshot(ro, INC, late), as_of=late).preview(
+            "wipe_host", "srv-db-01")
     assert now.outcome_if_requested == "ALLOW" and now.authorizes is False
     assert expired.outcome_if_requested == "REQUIRE_APPROVAL"
 

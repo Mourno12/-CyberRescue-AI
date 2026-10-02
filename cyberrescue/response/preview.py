@@ -47,8 +47,10 @@ def readonly_snapshot(core: ReadOnlyCore, incident_id: str, as_of: str) -> Incid
 class Previewer:
     """Evaluates hypothetical Commander requests against one snapshot."""
 
-    def __init__(self, snapshot: IncidentSnapshot, config: PolicyConfig | None = None) -> None:
+    def __init__(self, snapshot: IncidentSnapshot, *, as_of: str,
+                 config: PolicyConfig | None = None) -> None:
         self.snapshot = snapshot
+        self.as_of = as_of                 # the snapshot's fixed time, as the plan states it
         self._engine = PolicyEngine(config or PolicyConfig())
 
     @property
@@ -63,7 +65,7 @@ class Previewer:
         d = self._engine.evaluate(action=action, asset_id=asset_id,
                                   requester=HYPOTHETICAL_COMMANDER, snapshot=self.snapshot)
         return PolicyPreview(
-            as_of=self.snapshot.now.isoformat(), evaluated_asset_id=asset_id,
+            as_of=self.as_of, evaluated_asset_id=asset_id,
             outcome_if_requested=PolicyOutcome(d.outcome).value,
             unmet_rules=tuple(d.rules_failed),
             rule_results=tuple(PreviewRule(rule=r.rule, effect=r.effect, satisfied=r.satisfied,

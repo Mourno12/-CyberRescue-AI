@@ -185,9 +185,9 @@ class _Planner:
                 self._add(_Draft(f"quarantine:{host}:{k}", "quarantine_file", t, fd,
                                  {"host": host}, params={"path": shown[f"f:{k}"][0]},
                                  after_keys=(pre,)))
-            persist = [d for d in dets if d.rule_id == PERSISTENCE_RULE]
-            if persist:
-                self._note("persistence", [d.detection_id for d in persist], hosts=[host])
+            autostarts = [d for d in dets if d.rule_id == PERSISTENCE_RULE]
+            if autostarts:
+                self._note("persistence", [d.detection_id for d in autostarts], hosts=[host])
             self.decisions.append(("wipe_host", t, dets, {"host": host}, (iso, pre), ()))
             if any(d.rule_id == IMPACT_RULE for d in dets):
                 self.decisions.append(("restore_from_backup", t, dets, {"host": host},
@@ -351,7 +351,7 @@ def build_plan(core: ReadOnlyCore, incident_ref: str, *,
         raise RuntimeError("detection ruleset changed while planning")
     protected = protected or load_protected_accounts()
     reg_rules = load_reg_rules()
-    previewer = Previewer(readonly_snapshot(core, iid, case.as_of))
+    previewer = Previewer(readonly_snapshot(core, iid, case.as_of), as_of=case.as_of)
 
     p = _Planner(case, report.detections, view, previewer, protected, reg_rules)
     p.compromised()
