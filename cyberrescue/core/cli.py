@@ -5,7 +5,7 @@
     python -m cyberrescue.core register-actor --kind human --role ciso --name "Dana"
     python -m cyberrescue.core import-band room.json --incident INC-C --roster roster.json
     python -m cyberrescue.core request --incident INC-C --action wipe_host \
-        --asset srv-db-01 --requester <actor-id>
+        --asset srv-db-01 --requester <actor-id> [--plan-step STEP-<12 hex>]
     python -m cyberrescue.core approve --incident INC-C --action wipe_host \
         --asset srv-db-01 --approver <actor-id> --reason "..." [--override-hold] \
         [--override-veto] [--deny] [--ttl 60]
@@ -19,11 +19,19 @@
 The database defaults to ``$CYBERRESCUE_DB_PATH`` or ``<repo>/cyberrescue.db``.
 ``approve`` is the minimal Phase 1 human-approval path; it calls
 ``CoreService.grant_approval`` and is subject to all of its checks.
+
+``request --plan-step`` (Phase 6) binds the request to one step of a Phase 4
+response plan: the id is format-checked and stored as ``params.plan_step`` in
+the request and its audited ACTION_PROPOSED event, on the incident's chain. It
+changes nothing about the policy decision; it only says which plan step an
+authorization is for (required to record kill_process / quarantine_file /
+block_ip / disable_account executions).
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from cyberrescue.core import db
@@ -68,9 +76,20 @@ def _cmd_import(svc, args) -> int:
     return 0
 
 
+PLAN_STEP_RE = re.compile(r"^(?:STEP|DEC)-[0-9a-f]{12}$")
+
+
+def _plan_step(value: str) -> str:
+    if not PLAN_STEP_RE.match(value):
+        raise argparse.ArgumentTypeError(
+            "must be a plan step or decision id: STEP-<12 hex> or DEC-<12 hex>")
+    return value
+
+
 def _cmd_request(svc, args) -> int:
+    params = {"plan_step": args.plan_step} if args.plan_step else None
     out = svc.request_action(_incident(svc, args.incident), args.action, args.asset,
-                             args.requester, source="cli")
+                             args.requester, params=params, source="cli")
     d = out.decision
     print(f"[core] {d.outcome.value}: {args.action} on {args.asset or '-'} "
           f"(request {out.request.id}, policy {d.policy_version})")
@@ -78,6 +97,8 @@ def _cmd_request(svc, args) -> int:
         print(f"  - {reason}")
     if d.approval_id:
         print(f"  used approval {d.approval_id}")
+    if args.plan_step:
+        print(f"  bound to plan step {args.plan_step}")
     return 0
 
 
@@ -148,6 +169,9 @@ def _cmd_show(svc, args) -> int:
         print(f"  veto: {v.action or 'ALL tier-3'} ({v.regulation})")
     for r in svc.store.action_requests(iid):
         print(f"  action: {r.action:<20} {r.asset_id or '-':<12} {r.status.value}")
+    for x in svc.store.execution_records(iid):
+        print(f"  simulated execution: {x.action:<20} {x.asset_id or '-':<12} {x.outcome:<9} "
+              f"request {x.action_request_id} step {x.step_id} (mode {x.mode})")
     print(f"  evidence records: {len(svc.list_evidence(iid))}")
     print(f"  audit events: {len(svc.audit.events(iid))}")
     return 0
@@ -182,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--action", required=True)
     q.add_argument("--asset", default=None)
     q.add_argument("--requester", required=True, help="registered actor id")
+    q.add_argument("--plan-step", type=_plan_step, default=None,
+                   help="bind the request to a response-plan step (STEP-... or DEC-...)")
     q.set_defaults(fn=_cmd_request)
 
     a = sub.add_parser("approve", help="record a human approval (or denial)")
