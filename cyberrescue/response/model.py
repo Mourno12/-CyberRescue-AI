@@ -71,6 +71,10 @@ class PolicyPreview(_Frozen):
     authorizes: Literal[False] = False
     as_of: str
     hypothetical_requester: Literal["agent/commander"] = "agent/commander"
+    # The asset id the engine evaluated. The Core stores action targets as asset
+    # ids (a foreign key to the inventory), so ip/account targets can only be
+    # requested - and are previewed - with no asset id.
+    evaluated_asset_id: str | None = None
     outcome_if_requested: Literal["ALLOW", "REQUIRE_APPROVAL", "DENY"]
     unmet_rules: tuple[str, ...] = ()
     rule_results: tuple[PreviewRule, ...] = ()
