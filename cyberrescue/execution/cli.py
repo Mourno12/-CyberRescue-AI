@@ -29,7 +29,9 @@ from pathlib import Path
 from cyberrescue.core.audit import canonical_json
 from cyberrescue.execution.executor import simulate_plan, verify_report
 from cyberrescue.execution.export import BANNER, FORMATS, render
+from cyberrescue.execution.model import ExecutionReport
 from cyberrescue.execution.recorder import record_plan
+from cyberrescue.execution.records import recorded_for, verify_recorded
 from cyberrescue.investigation.export import plain_text
 from cyberrescue.investigation.readonly import ReadOnlyError, open_readonly
 from cyberrescue.response.export import preview_text
@@ -105,11 +107,20 @@ def _cmd_show(core, args) -> int:
 
 
 def _cmd_verify(core, args) -> int:
-    res = verify_report(core, Path(args.report).read_text(encoding="utf-8"), _plan_text(args),
-                        protected=_protected(args))
+    report_text = Path(args.report).read_text(encoding="utf-8")
+    try:
+        recorded = recorded_for(core, ExecutionReport.model_validate_json(report_text))
+    except ValueError:
+        recorded = []
+    if recorded:                       # Phase 6: a recorded run - cross-check the Core
+        res = verify_recorded(core, report_text, _plan_text(args))
+        what = f"recorded run ({res.records} Core execution record(s))"
+    else:
+        res = verify_report(core, report_text, _plan_text(args), protected=_protected(args))
+        what = "report"
     for e in res.errors:
         _say(f"  - {p(e)}")
-    _say(f"[simulation] report {'VERIFIED' if res.ok else 'DOES NOT VERIFY'}")
+    _say(f"[simulation] {what} {'VERIFIED' if res.ok else 'DOES NOT VERIFY'}")
     return 0 if res.ok else 1
 
 
