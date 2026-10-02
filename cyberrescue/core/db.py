@@ -22,6 +22,13 @@ Schema versions:
     security data; ``finding_evidence`` links findings to the evidence they
     cite. ``init_schema`` migrates a v1 database in place (see
     ``_migrate_v1_to_v2``).
+  * v3 (Phase 6): adds ``execution_records`` - one append-only record per
+    authorized action request that a SIMULATED execution used. ``UNIQUE``
+    request (no replay), ``CHECK (mode = 'simulated')`` (real execution cannot
+    be recorded), and insert triggers that bind a record to its request's
+    incident, action and asset and require an authorized tier-1/2 request.
+    Purely additive: v2 -> v3 creates the table and its triggers; no existing
+    row or audit event changes.
 """
 
 from __future__ import annotations
@@ -33,14 +40,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 TABLES = (
     "schema_meta", "actors", "assets", "incidents", "incident_aliases",
     "audit_events", "event_links", "findings", "finding_claims", "evidence",
     "finding_evidence", "signoffs", "vetoes", "legal_holds", "action_requests",
-    "policy_decisions", "approvals", "risk_snapshots",
+    "policy_decisions", "approvals", "risk_snapshots", "execution_records",
 )
 
 _DDL = """
@@ -307,6 +314,49 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
     event_uid   TEXT NOT NULL REFERENCES audit_events(uid),
     created_at  TEXT NOT NULL
 );
+
+-- v3 (Phase 6): accountability for SIMULATED execution. One row per authorized
+-- request, ever; append-only; never a real execution.
+CREATE TABLE IF NOT EXISTS execution_records (
+    id                   TEXT PRIMARY KEY,
+    incident_id          TEXT NOT NULL REFERENCES incidents(id),
+    action_request_id    TEXT NOT NULL UNIQUE REFERENCES action_requests(id),
+    mode                 TEXT NOT NULL CHECK (mode = 'simulated'),
+    action               TEXT NOT NULL,
+    asset_id             TEXT REFERENCES assets(asset_id),
+    plan_id              TEXT NOT NULL,
+    plan_sha256          TEXT NOT NULL,
+    step_id              TEXT NOT NULL,
+    step_sha256          TEXT NOT NULL,
+    report_sha256        TEXT NOT NULL,
+    evidence_fingerprint TEXT NOT NULL,
+    environment_sha256   TEXT NOT NULL,
+    outcome              TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    criteria             TEXT NOT NULL DEFAULT '[]',
+    audit_head_hash      TEXT NOT NULL,
+    recorded_by          TEXT NOT NULL REFERENCES actors(id),
+    authorized_event_uid TEXT NOT NULL REFERENCES audit_events(uid),
+    executed_event_uid   TEXT NOT NULL REFERENCES audit_events(uid),
+    verified_event_uid   TEXT NOT NULL REFERENCES audit_events(uid),
+    created_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_execution_records_incident ON execution_records(incident_id);
+CREATE TRIGGER IF NOT EXISTS execution_records_no_update
+BEFORE UPDATE ON execution_records
+BEGIN SELECT RAISE(ABORT, 'execution_records is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS execution_records_no_delete
+BEFORE DELETE ON execution_records
+BEGIN SELECT RAISE(ABORT, 'execution_records is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS execution_records_bound_to_request
+BEFORE INSERT ON execution_records
+WHEN NOT EXISTS (
+    SELECT 1 FROM action_requests r
+    WHERE r.id = NEW.action_request_id AND r.incident_id = NEW.incident_id
+      AND r.action = NEW.action AND r.asset_id IS NEW.asset_id
+      AND r.status = 'authorized' AND r.tier IN (1, 2))
+BEGIN SELECT RAISE(ABORT,
+    'execution record does not match an authorized tier-1/2 request of this incident, action and asset');
+END;
 """
 
 
@@ -370,7 +420,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
                                f"(v{SCHEMA_VERSION})")
         if current == 1:
             _migrate_v1_to_v2(conn)  # must run BEFORE the DDL creates the new 'evidence'
-    conn.executescript(_DDL)
+    else:
+        current = SCHEMA_VERSION      # a fresh database
+    conn.executescript(_DDL)          # v2 -> v3 is purely additive (IF NOT EXISTS)
+    if 0 < current < 3:
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('migration.v2_to_v3', "
+            "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
     conn.execute(
         "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",

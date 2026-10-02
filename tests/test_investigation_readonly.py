@@ -26,7 +26,7 @@ def test_missing_database_is_refused_and_not_created(tmp_path):
     assert not target.exists()
 
 
-@pytest.mark.parametrize("version", ["1", "3"])
+@pytest.mark.parametrize("version", ["1", "2", "4"])
 def test_other_schema_versions_are_refused(tmp_path, version):
     path = tmp_path / "core.db"
     CoreService.open(path).conn.close()

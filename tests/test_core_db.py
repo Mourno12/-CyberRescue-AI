@@ -87,7 +87,7 @@ def test_v1_database_is_migrated_in_place_preserving_data_and_audit(tmp_path):
     assert len(before) == 2
 
     conn = db.connect(path)                                   # migrates
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
     after = conn.execute("SELECT * FROM finding_claims ORDER BY content").fetchall()
     assert [tuple(r) for r in after] == [tuple(r) for r in before]   # verbatim
     assert "content_sha256" in {r[1] for r in conn.execute("PRAGMA table_info(evidence)")}
@@ -106,7 +106,7 @@ def test_migration_is_idempotent_and_refuses_ambiguous_state(tmp_path):
     _make_v1_db(path)
     db.connect(path).close()
     conn = db.connect(path)                                   # second open: no-op
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
     assert conn.execute("SELECT COUNT(*) FROM finding_claims").fetchone()[0] == 2
     conn.close()
 
