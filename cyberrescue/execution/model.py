@@ -11,7 +11,8 @@ transitions; every result carries the full path it took:
                         -> SIMULATED -> SUCCEEDED | FAILED  (terminal)
 
 * BLOCKED      - an authorization, policy, veto, legal-hold, dependency,
-                 integrity or target check failed (``block_category`` says which);
+                 integrity or target check failed (``block_category`` says which;
+                 Phase 6 adds ``already_executed`` and ``expired``);
 * UNSUPPORTED  - no safe simulation exists for the action;
 * SUCCEEDED    - simulated, and every success criterion from the plan holds;
 * FAILED       - simulated, but at least one success criterion does not hold.
@@ -45,7 +46,9 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "SIMULATED": frozenset({"SUCCEEDED", "FAILED"}),
 }
 BlockCategory = Literal["integrity", "authorization", "policy", "veto", "legal_hold",
-                        "target", "dependency", "human_decision"]
+                        "target", "dependency", "human_decision",
+                        # Phase 6: the authorization was already used / is too old
+                        "already_executed", "expired"]
 
 __all__ = ["EXECUTION_SCHEMA", "SIMULATION_DISCLAIMER", "TERMINAL", "TRANSITIONS",
            "AuthorizationView", "CheckResult", "CriterionResult", "DecisionResult",

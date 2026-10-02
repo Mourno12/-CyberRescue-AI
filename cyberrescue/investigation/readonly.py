@@ -30,7 +30,9 @@ STORE_READS = frozenset({
     "resolve_incident", "aliases_of", "open_incidents_for_asset", "findings", "get_finding",
     "claims_for", "latest_signoff_request", "signoffs_for", "active_vetoes", "active_holds",
     "get_action_request", "action_requests", "decisions_for", "get_approval",
-    "unconsumed_approvals"})
+    "unconsumed_approvals",
+    # Phase 6 (schema v3): simulated execution records - reads only.
+    "execution_records", "execution_record_for", "evidence_fingerprint", "chain_head"})
 EVIDENCE_READS = frozenset({"get", "list", "verify", "evidence_for_finding",
                             "findings_citing"})
 AUDIT_READS = frozenset({"events", "get", "verify", "verify_all", "chains", "links_to"})

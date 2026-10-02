@@ -26,6 +26,12 @@ Binding a Core authorization to a plan item:
 
 Each authorization is used by at most one item per run.
 
+Phase 6: an authorization that already has a Core execution record
+(``execution_records``, schema v3) is spent - ``select_authorization`` reports
+the item ``already_executed`` - and one older than the approval lifetime at
+the plan's ``as_of`` is ``expired``. The Core enforces both again, with its own
+clock, when a run is recorded.
+
 ``recheck`` then asks the policy engine (via the Phase 4 previewer, pure) about
 the state NOW: a hard DENY blocks the item, and so does a veto that the
 authorizing decision did not consider.
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from cyberrescue.core.catalog import ASSET_BOUND_ACTIONS
 from cyberrescue.core.models import ActionStatus, ActorKind, EventType
@@ -61,6 +68,7 @@ class CoreAuthorization:
     requested_by_role: str
     approval_id: str | None
     created_at: str
+    executed_record_id: str | None = None        # Phase 6: already used by a record
 
 
 def core_authorizations(core: ReadOnlyCore, incident_id: str) -> list[CoreAuthorization]:
@@ -88,6 +96,7 @@ def core_authorizations(core: ReadOnlyCore, incident_id: str) -> list[CoreAuthor
         if not allowed:
             continue
         step = req.params.get("plan_step")
+        record = core.store.execution_record_for(req.id)
         out.append(CoreAuthorization(
             request_id=req.id, action=req.action, asset_id=req.asset_id,
             plan_step=step if isinstance(step, str) else None,
@@ -95,7 +104,8 @@ def core_authorizations(core: ReadOnlyCore, incident_id: str) -> list[CoreAuthor
             decision_rules=tuple(r["rule"] for r in json.loads(decision["rule_results"])),
             authorized_event_uid=ev.uid, authorized_at=ev.ts,
             requested_by_role=f"{actor.kind.value}/{actor.role}",
-            approval_id=decision["approval_id"], created_at=req.created_at))
+            approval_id=decision["approval_id"], created_at=req.created_at,
+            executed_record_id=record.id if record else None))
     return sorted(out, key=lambda a: (a.created_at, a.request_id))
 
 
@@ -128,6 +138,35 @@ def find_authorization(records: list[CoreAuthorization], item_id: str, action: s
         decision_event_uid=a.decision_event_uid, authorized_event_uid=a.authorized_event_uid,
         binding=bound, requested_by_role=a.requested_by_role, approval_id=a.approval_id,
         authorized_at=a.authorized_at), f"authorized by the Core (binding: {bound})"
+
+
+def select_authorization(records: list[CoreAuthorization], item_id: str, action: str,
+                         target: Target, used: set[str], *, as_of: str, max_age_minutes: int
+                         ) -> tuple[AuthorizationView | None, str, str | None]:
+    """``find_authorization`` over authorizations that are neither spent (an
+    execution record exists) nor older than ``max_age_minutes`` at ``as_of``.
+    Returns (view, reason, block category or None)."""
+    at = datetime.fromisoformat(as_of)          # the plan's as_of - never a wall clock
+
+    def fresh(a: CoreAuthorization) -> bool:
+        return at - datetime.fromisoformat(a.authorized_at) <= timedelta(minutes=max_age_minutes)
+
+    usable = [a for a in records if a.executed_record_id is None and fresh(a)]
+    view, why = find_authorization(usable, item_id, action, target, used)
+    if view is not None:
+        return view, why, None
+    spent = [a for a in records if a.executed_record_id is not None]
+    hit, _ = find_authorization(spent, item_id, action, target, set())
+    if hit is not None:
+        rec = next(a.executed_record_id for a in spent if a.request_id == hit.request_id)
+        return None, (f"the Core authorization was already used by simulated execution "
+                      f"record {rec}"), "already_executed"
+    stale = [a for a in records if a.executed_record_id is None and not fresh(a)]
+    hit, _ = find_authorization(stale, item_id, action, target, set())
+    if hit is not None:
+        return None, (f"the Core authorization is older than {max_age_minutes} minutes "
+                      "at the plan's as_of"), "expired"
+    return None, why, "authorization"
 
 
 def recheck(previewer: Previewer, action: str, target: Target,

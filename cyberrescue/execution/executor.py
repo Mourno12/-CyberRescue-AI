@@ -44,7 +44,8 @@ from cyberrescue.core.catalog import get_action
 from cyberrescue.core.models import ActionTier
 from cyberrescue.detection.engine import load_view
 from cyberrescue.detection.model import digest
-from cyberrescue.execution.authorization import core_authorizations, find_authorization, recheck
+from cyberrescue.core.policy import PolicyConfig
+from cyberrescue.execution.authorization import core_authorizations, recheck, select_authorization
 from cyberrescue.execution.environment import SimEnvironment
 from cyberrescue.execution.handlers import HANDLERS, evaluate_criteria
 from cyberrescue.execution.model import CheckResult, DecisionResult, ExecutionReport, StepResult
@@ -115,6 +116,8 @@ class _Run:
     previewer: Previewer
     protected: ProtectedAccounts
     records: list
+    as_of: str = ""
+    max_age_minutes: int = 60
     used: set[str] = field(default_factory=set)
     status: dict[str, str] = field(default_factory=dict)
 
@@ -171,13 +174,14 @@ class _Run:
         if not check("simulator", handler is not None, "a simulated handler exists"
                      if handler else "no safe simulation exists for this action"):
             return stop("UNSUPPORTED", None, "no safe simulation exists for this action")
-        auth, why = find_authorization(self.records, step.step_id, step.action, step.target,
-                                       self.used)
+        auth, why, category = select_authorization(
+            self.records, step.step_id, step.action, step.target, self.used,
+            as_of=self.as_of, max_age_minutes=self.max_age_minutes)
         preview = self.previewer.preview(step.action, step.target.value, kind=step.target.kind)
         if not check("core_authorization", auth is not None, why):
             needs = f" (policy now: {preview.outcome_if_requested}" + \
                 (f" [{', '.join(preview.unmet_rules)}])" if preview.unmet_rules else ")")
-            return stop("BLOCKED", "authorization", why + needs, current_policy=preview)
+            return stop("BLOCKED", category, why + needs, current_policy=preview)
         auth_rules = next(a.decision_rules for a in self.records
                           if a.request_id == auth.request_id)
         category, reason, preview = recheck(self.previewer, step.action, step.target,
@@ -235,7 +239,9 @@ def simulate_plan(core: ReadOnlyCore, plan_json: str, *,
     run = _Run(core=core, plan=plan, fresh={s.step_id: s for s in fresh.steps},
                plan_ok=all(c.passed for c in plan_checks), view=view, env=env,
                previewer=Previewer(readonly_snapshot(core, iid, fresh.as_of), as_of=fresh.as_of),
-               protected=protected, records=core_authorizations(core, iid))
+               protected=protected, records=core_authorizations(core, iid),
+               as_of=fresh.as_of,
+               max_age_minutes=PolicyConfig.from_env().approval_ttl_minutes)
     steps = tuple(run.step(s) for s in sorted(plan.steps, key=lambda s: s.order))
     decisions = tuple(run.decision(d) for d in plan.decision_points)
 
