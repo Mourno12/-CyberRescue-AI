@@ -1,9 +1,11 @@
 """python -m cyberrescue.evaluation run [--scenario A] [--json] [--investigation] [--response]
+                                         [--execution]
 
 Runs each scenario in a temporary Core (the operational database is never
 touched) and prints per-scenario metrics. Exit status 1 if any scenario has an
 unexpected finding, a missed stage, a fact mismatch, (with --investigation)
-a case-check mismatch, or (with --response) a plan-check mismatch.
+a case-check mismatch, (with --response) a plan-check mismatch, or (with
+--execution) an execution-check mismatch.
 """
 
 from __future__ import annotations
@@ -55,14 +57,20 @@ def _cmd_run(args) -> int:
     if args.response:
         from cyberrescue.evaluation.response import evaluate_plan, run_plan
         plans = [evaluate_plan(run_plan(k)) for k in keys]
+    runs = []
+    if args.execution:
+        from cyberrescue.evaluation.execution import evaluate_execution, run_execution
+        runs = [evaluate_execution(*run_execution(k)) for k in keys]
     if args.json:
         doc: object = [r.to_dict() for r in results]
-        if args.investigation or args.response:
+        if args.investigation or args.response or args.execution:
             doc = {"detection": doc}
             if args.investigation:
                 doc["investigation"] = [c.to_dict() for c in cases]
             if args.response:
                 doc["response"] = [x.to_dict() for x in plans]
+            if args.execution:
+                doc["execution"] = [x.to_dict() for x in runs]
         print(json.dumps(doc, sort_keys=True, indent=2))
     else:
         for r in results:
@@ -78,9 +86,17 @@ def _cmd_run(args) -> int:
             for ch in x.checks:
                 print(f"   check {ch.check:<30} {ch.status:<13} expected={ch.expected!r} "
                       f"observed={ch.observed!r}")
+        for x in runs:
+            print(f"== Simulated execution (scenario {x.scenario}) - SIMULATION ONLY")
+            for regime, counts in x.outcomes.items():
+                shown = ", ".join(f"{k} {v}" for k, v in counts.items() if v) or "nothing"
+                print(f"   {regime:<16} {shown}")
+            for ch in x.checks:
+                print(f"   check {ch.check:<30} {ch.status:<13} expected={ch.expected!r} "
+                      f"observed={ch.observed!r}")
     bad = [r.scenario for r in results if r.unexpected_findings or r.missed_stages
            or any(f.status == "mismatch" for f in r.facts)]
-    bad += [c.scenario for c in (*cases, *plans)
+    bad += [c.scenario for c in (*cases, *plans, *runs)
             if any(ch.status == "mismatch" for ch in c.checks)]
     if bad:
         print(f"[evaluation] attention needed: {', '.join(bad)}", file=sys.stderr)
@@ -98,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="also evaluate the Phase 3 investigation case")
     r.add_argument("--response", action="store_true",
                    help="also evaluate the Phase 4 response plan")
+    r.add_argument("--execution", action="store_true",
+                   help="also evaluate the Phase 5 simulated executor")
     r.set_defaults(fn=_cmd_run)
     args = p.parse_args(argv)
     try:
