@@ -24,7 +24,8 @@ class Clock:
 
 
 def kwargs(svc, **kw):
-    base = {"plan_id": "PLAN-" + "1" * 16, "plan_sha256": HEX, "step_id": "STEP-" + "2" * 12,
+    base = {"action": "preserve_disk_image", "asset_id": "srv-db-01",
+            "plan_id": "PLAN-" + "1" * 16, "plan_sha256": HEX, "step_id": "STEP-" + "2" * 12,
             "step_sha256": HEX, "report_sha256": HEX,
             "evidence_fingerprint": svc.store.evidence_fingerprint(INC),
             "environment_sha256": HEX, "outcome": "succeeded",

@@ -541,8 +541,8 @@ class CoreService:
 
     # --- simulated execution records (Phase 6) ------------------------------------------
     def record_simulated_execution(
-            self, incident_id: str, *, request_id: str, recorder_actor_id: str, plan_id: str,
-            plan_sha256: str, step_id: str, step_sha256: str, report_sha256: str,
+            self, incident_id: str, *, request_id: str, recorder_actor_id: str, action: str,
+            asset_id: str | None, plan_id: str, plan_sha256: str, step_id: str, step_sha256: str, report_sha256: str,
             evidence_fingerprint: str, environment_sha256: str, outcome: str,
             criteria: list[dict[str, Any]], source: str = "core") -> ExecutionRecord:
         """THE ONLY WAY TO RECORD AN EXECUTION - and only a SIMULATED one.
@@ -556,6 +556,8 @@ class CoreService:
           non-destructive catalogue action, has an ALLOW decision with the
           ``ACTION_AUTHORIZED`` event linked to it, and was requested by an actor
           policy rule P1 allows;
+        * the step's ``action`` and ``asset_id`` equal the request's (no target
+          substitution);
         * binding: a request carrying ``params.plan_step`` must name ``step_id``;
           one without it is accepted only for asset-bound actions;
         * the authorization is not older than the approval lifetime
@@ -600,6 +602,8 @@ class CoreService:
                 if isinstance(request_id, str) else None
             if req is None or req.incident_id != inc.id:
                 refuse("the request does not belong to this incident")
+            if (action, asset_id) != (req.action, req.asset_id):
+                refuse("the step's action or target differs from the authorized request")
             if req.status != ActionStatus.AUTHORIZED:
                 refuse(f"the request is {req.status.value}, not authorized")
             spec = get_action(req.action)
