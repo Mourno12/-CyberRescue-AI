@@ -15,6 +15,7 @@ from cyberrescue.response.playbooks import (
     DECISIONS,
     NOTES,
     PHASE_ORDER,
+    CRITICALITY_CAUTION,
     PLAYBOOK_VERSION,
     STEPS,
     TASKS,
@@ -40,6 +41,7 @@ def _templates():
         yield f"task:{k}", t.description
     for k, n in NOTES.items():
         yield f"note:{k}", n
+    yield "caution:criticality", CRITICALITY_CAUTION
 
 
 # --- ATT&CK ------------------------------------------------------------------------

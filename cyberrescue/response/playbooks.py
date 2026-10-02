@@ -6,7 +6,8 @@ attacker-written text has a route into a proposed action.
 
     compromised host (execution / persistence / recovery inhibition / impact /
       multi-stage detection)  -> isolate_host, then preserve_disk_image;
-                                 wipe_host / restore_from_backup as DECISIONS
+                                 wipe_host as a DECISION, and restore_from_backup
+                                 as a DECISION where impact (RANSOM-001) is seen
     malicious executable (IOC-001 / PROC-001, PERSIST-001 target)
                               -> quarantine_file, after imaging
     malicious process (IOC-001 / PROC-001 / RANSOM-001)
@@ -44,6 +45,10 @@ PROCESS_RULES = ("IOC-001", "PROC-001", "RANSOM-001")
 PERSISTENCE_RULE = "PERSIST-001"
 C2_RULE = "IOC-002"
 LATERAL_AUTH_RULES = ("AUTH-001", "LAT-001")
+IMPACT_RULE = "RANSOM-001"
+CRITICAL = ("high", "critical")
+CRITICALITY_CAUTION = ("{host} is a {criticality}-criticality asset; this action interrupts "
+                       "the services it provides.")
 BASE_STAKEHOLDERS = ("CISO",)
 DATA_STAKEHOLDERS = ("CISO", "DPO", "Legal")
 
