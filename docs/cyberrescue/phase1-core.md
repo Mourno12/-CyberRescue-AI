@@ -126,6 +126,7 @@ POLICY_DECISION ─relied_on─► APPROVAL_GRANTED / SIGNOFF_RECORDED
 POLICY_DECISION ─blocked_by─► VETO_RECORDED / LEGAL_HOLD_PLACED
 ACTION_AUTHORIZED ─authorizes─► POLICY_DECISION,  ─consumes─► APPROVAL_GRANTED
 Phase 4: ACTION_EXECUTED ─executes─► ACTION_AUTHORIZED; ACTION_VERIFIED ─verifies─► ACTION_EXECUTED
+         (implemented in Phase 6, for simulated executions only — see phase6-execution-accountability.md)
 ```
 
 Limits: tamper-*evident*, not tamper-proof (a writer with raw file access can
