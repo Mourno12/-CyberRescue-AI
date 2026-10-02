@@ -1,11 +1,12 @@
 """python -m cyberrescue.evaluation run [--scenario A] [--json] [--investigation] [--response]
-                                         [--execution]
+                                         [--execution] [--accountability]
 
 Runs each scenario in a temporary Core (the operational database is never
 touched) and prints per-scenario metrics. Exit status 1 if any scenario has an
 unexpected finding, a missed stage, a fact mismatch, (with --investigation)
 a case-check mismatch, (with --response) a plan-check mismatch, or (with
---execution) an execution-check mismatch.
+--execution) an execution-check mismatch, or (with --accountability) an
+accountability-check mismatch.
 """
 
 from __future__ import annotations
@@ -61,9 +62,16 @@ def _cmd_run(args) -> int:
     if args.execution:
         from cyberrescue.evaluation.execution import evaluate_execution, run_execution
         runs = [evaluate_execution(*run_execution(k)) for k in keys]
+    acc = []
+    if args.accountability:
+        from cyberrescue.evaluation.accountability import (
+            evaluate_accountability,
+            run_accountability,
+        )
+        acc = [evaluate_accountability(run_accountability(k)) for k in keys]
     if args.json:
         doc: object = [r.to_dict() for r in results]
-        if args.investigation or args.response or args.execution:
+        if args.investigation or args.response or args.execution or args.accountability:
             doc = {"detection": doc}
             if args.investigation:
                 doc["investigation"] = [c.to_dict() for c in cases]
@@ -71,6 +79,8 @@ def _cmd_run(args) -> int:
                 doc["response"] = [x.to_dict() for x in plans]
             if args.execution:
                 doc["execution"] = [x.to_dict() for x in runs]
+            if args.accountability:
+                doc["accountability"] = [x.to_dict() for x in acc]
         print(json.dumps(doc, sort_keys=True, indent=2))
     else:
         for r in results:
@@ -94,9 +104,15 @@ def _cmd_run(args) -> int:
             for ch in x.checks:
                 print(f"   check {ch.check:<30} {ch.status:<13} expected={ch.expected!r} "
                       f"observed={ch.observed!r}")
+        for x in acc:
+            print(f"== Execution accountability (scenario {x.scenario}) - SIMULATION ONLY: "
+                  f"{x.recorded} recorded, {x.refused} refused, {x.replayed} on replay")
+            for ch in x.checks:
+                print(f"   check {ch.check:<30} {ch.status:<13} expected={ch.expected!r} "
+                      f"observed={ch.observed!r}")
     bad = [r.scenario for r in results if r.unexpected_findings or r.missed_stages
            or any(f.status == "mismatch" for f in r.facts)]
-    bad += [c.scenario for c in (*cases, *plans, *runs)
+    bad += [c.scenario for c in (*cases, *plans, *runs, *acc)
             if any(ch.status == "mismatch" for ch in c.checks)]
     if bad:
         print(f"[evaluation] attention needed: {', '.join(bad)}", file=sys.stderr)
@@ -116,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="also evaluate the Phase 4 response plan")
     r.add_argument("--execution", action="store_true",
                    help="also evaluate the Phase 5 simulated executor")
+    r.add_argument("--accountability", action="store_true",
+                   help="also evaluate Phase 6 execution accountability (records)")
     r.set_defaults(fn=_cmd_run)
     args = p.parse_args(argv)
     try:
