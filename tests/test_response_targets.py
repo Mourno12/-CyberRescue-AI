@@ -104,3 +104,16 @@ def test_protected_list_file_is_versioned_and_fingerprinted(tmp_path):
     other.write_text(json.dumps({"accounts": ["x"]}), encoding="utf-8")
     with pytest.raises(ValueError, match="protected-accounts/1"):
         load_protected_accounts(other)
+
+
+def test_protected_list_fingerprint_ignores_line_endings_and_order(tmp_path):
+    p = load_protected_accounts()
+    raw = PROTECTED_ACCOUNTS_FILE.read_bytes().replace(b"\r\n", b"\n")
+    crlf = tmp_path / "crlf.json"
+    crlf.write_bytes(raw.replace(b"\n", b"\r\n"))
+    assert load_protected_accounts(crlf).sha256 == p.sha256
+    doc = json.loads(raw)
+    doc["accounts"] = list(reversed(doc["accounts"]))
+    rev = tmp_path / "rev.json"
+    rev.write_text(json.dumps(doc), encoding="utf-8")
+    assert load_protected_accounts(rev).sha256 == p.sha256

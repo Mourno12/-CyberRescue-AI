@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cyberrescue.core.audit import canonical_json
 from cyberrescue.detection.context import AssetContext, EvidenceView
 from cyberrescue.detection.matchers import is_external, normalize_ip, safe_token
 from cyberrescue.response.model import Target
@@ -47,7 +48,9 @@ def load_protected_accounts(path: str | Path | None = None) -> ProtectedAccounts
     if doc.get("schema") != "cyberrescue.protected-accounts/1":
         raise ValueError("not a cyberrescue.protected-accounts/1 document")
     names = frozenset(str(a).strip().lower() for a in doc.get("accounts", []) if str(a).strip())
-    return ProtectedAccounts(names=names, sha256=hashlib.sha256(raw).hexdigest())
+    # Fingerprint the normalised list, not the bytes (line endings must not matter).
+    return ProtectedAccounts(names=names, sha256=hashlib.sha256(
+        canonical_json(sorted(names)).encode()).hexdigest())
 
 
 @dataclass(frozen=True)
