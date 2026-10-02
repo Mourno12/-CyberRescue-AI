@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from cyberrescue.core.catalog import ASSET_BOUND_ACTIONS
 from cyberrescue.core.models import ActionStatus, ActorKind, EventType
 from cyberrescue.core.policy import PolicyConfig
 from cyberrescue.execution.model import AuthorizationView
@@ -43,7 +44,7 @@ from cyberrescue.investigation.readonly import ReadOnlyCore
 from cyberrescue.response.model import PolicyPreview, Target
 from cyberrescue.response.preview import Previewer
 
-ASSET_BOUND = frozenset({"isolate_host", "preserve_disk_image", "notify_stakeholders"})
+ASSET_BOUND = ASSET_BOUND_ACTIONS
 
 
 @dataclass(frozen=True)

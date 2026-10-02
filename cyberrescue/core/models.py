@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum, IntEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -90,8 +90,8 @@ class EventType(str, Enum):
     # lifecycle
     STATE_CHANGED = "STATE_CHANGED"
     STATE_TRANSITION_REJECTED = "STATE_TRANSITION_REJECTED"
-    # Reserved for Phase 4 (executor/verification) — defined so the audit
-    # vocabulary is stable, not emitted in Phase 1.
+    # Phase 6: emitted ONLY by CoreService.record_simulated_execution, for
+    # SIMULATED executions (payload "mode": "simulated"); never for real ones.
     ACTION_EXECUTED = "ACTION_EXECUTED"
     ACTION_VERIFIED = "ACTION_VERIFIED"
 
@@ -115,7 +115,7 @@ class LinkRelation(str, Enum):
     CONSUMES = "consumes"           # action authorized -> approval (single use)
     CAUSED_BY = "caused_by"         # state change -> triggering event
     CONCERNS = "concerns"           # approval/claim -> the event it is about
-    # Reserved for Phase 4.
+    # Phase 6 (simulated executions only).
     EXECUTES = "executes"           # action executed -> action authorized
     VERIFIES = "verifies"           # action verified -> action executed
 
@@ -388,6 +388,35 @@ class Approval(_Model):
     consumed_by_request_id: str | None = None
     consumed_at: str | None = None
     event_uid: str
+    created_at: str = ""
+
+
+class ExecutionRecord(_Model):
+    """Phase 6: the Core's record that a SIMULATED execution used one authorized
+    action request (schema v3 ``execution_records``; append-only, one per request).
+    ``action_requests.status`` stays ``authorized``: this record is the source of
+    truth for "this authorization has been used"."""
+    id: str
+    incident_id: str
+    action_request_id: str
+    mode: Literal["simulated"] = "simulated"
+    action: str
+    asset_id: str | None = None
+    plan_id: str
+    plan_sha256: str
+    step_id: str
+    step_sha256: str
+    report_sha256: str
+    evidence_fingerprint: str
+    environment_sha256: str
+    outcome: Literal["succeeded", "failed"]
+    criteria: list[dict[str, Any]] = Field(default_factory=list)
+    audit_head_hash: str
+    recorded_by: str
+    authorized_event_uid: str
+    executed_event_uid: str
+    verified_event_uid: str
+    event_uid: str = ""
     created_at: str = ""
 
 

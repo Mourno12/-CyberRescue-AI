@@ -10,6 +10,7 @@ change. Nothing in this module decides policy; ``policy.py`` does, and
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -17,7 +18,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import Any
 
-from cyberrescue.core.audit import AuditEvent, AuditLog, LinkSpec, utcnow
+from cyberrescue.core.audit import AuditEvent, AuditLog, LinkSpec, canonical_json, utcnow
 from cyberrescue.core.db import transaction
 from cyberrescue.core.ids import (
     generate_incident_id,
@@ -36,6 +37,7 @@ from cyberrescue.core.models import (
     ApprovalDecision,
     Asset,
     EventType,
+    ExecutionRecord,
     Finding,
     FindingClaim,
     HoldStatus,
@@ -606,6 +608,75 @@ class CoreStore:
                 (rid, incident_id, level, score, _j(factors), method, ev.uid, ev.ts))
         return RiskSnapshot(id=rid, incident_id=incident_id, level=level, score=score,
                             factors=factors, method=method, event_uid=ev.uid, created_at=ev.ts)
+
+    # --- simulated execution records (Phase 6, schema v3) ---------------------------
+    @staticmethod
+    def _execution(row: sqlite3.Row) -> ExecutionRecord:
+        return ExecutionRecord(**{**dict(row), "criteria": json.loads(row["criteria"]),
+                                  "event_uid": row["executed_event_uid"]})
+
+    def execution_record_for(self, request_id: str) -> ExecutionRecord | None:
+        row = self._one("SELECT * FROM execution_records WHERE action_request_id = ?",
+                        (request_id,))
+        return self._execution(row) if row else None
+
+    def execution_records(self, incident_id: str) -> list[ExecutionRecord]:
+        return [self._execution(r) for r in self._all(
+            "SELECT * FROM execution_records WHERE incident_id = ? ORDER BY created_at, id",
+            (incident_id,))]
+
+    def evidence_fingerprint(self, incident_id: str) -> str:
+        """Content fingerprint of an incident's evidence - the same value as the
+        detection layer's ``EvidenceView.fingerprint`` (sorted (id, content hash))."""
+        rows = self._all("SELECT id, content_sha256 FROM evidence WHERE incident_id = ?",
+                         (incident_id,))
+        body = sorted([r["id"], r["content_sha256"]] for r in rows)
+        return hashlib.sha256(canonical_json(body).encode()).hexdigest()
+
+    def chain_head(self, incident_id: str) -> str | None:
+        row = self._one("SELECT hash FROM audit_events WHERE chain = ? ORDER BY seq DESC "
+                        "LIMIT 1", (incident_id,))
+        return row["hash"] if row else None
+
+    def add_execution_record(self, request: ActionRequest, *, recorder_id: str,
+                             authorized_event_uid: str, plan_id: str, plan_sha256: str,
+                             step_id: str, step_sha256: str, report_sha256: str,
+                             evidence_fingerprint: str, environment_sha256: str,
+                             outcome: str, criteria: list[dict[str, Any]],
+                             source: str = "core") -> ExecutionRecord:
+        """ACTION_EXECUTED (executes -> ACTION_AUTHORIZED), ACTION_VERIFIED
+        (verifies -> ACTION_EXECUTED) and the execution_records row, in ONE
+        transaction. The request's status is deliberately left unchanged."""
+        rid = _new_id()
+        with transaction(self.conn):
+            head = self.chain_head(request.incident_id) or ""
+            executed = self.audit.append(
+                EventType.ACTION_EXECUTED, incident_id=request.incident_id,
+                actor_id=recorder_id, source=source,
+                payload={"mode": "simulated", "execution_id": rid, "request_id": request.id,
+                         "action": request.action, "asset_id": request.asset_id,
+                         "plan_id": plan_id, "plan_sha256": plan_sha256, "step_id": step_id,
+                         "step_sha256": step_sha256, "report_sha256": report_sha256,
+                         "evidence_fingerprint": evidence_fingerprint,
+                         "environment_sha256": environment_sha256, "audit_head_hash": head},
+                links=[(LinkRelation.EXECUTES, authorized_event_uid)])
+            verified = self.audit.append(
+                EventType.ACTION_VERIFIED, incident_id=request.incident_id,
+                actor_id=recorder_id, source=source,
+                payload={"mode": "simulated", "execution_id": rid, "request_id": request.id,
+                         "outcome": outcome, "criteria": criteria},
+                links=[(LinkRelation.VERIFIES, executed.uid)])
+            self.conn.execute(
+                "INSERT INTO execution_records(id, incident_id, action_request_id, mode, "
+                "action, asset_id, plan_id, plan_sha256, step_id, step_sha256, report_sha256, "
+                "evidence_fingerprint, environment_sha256, outcome, criteria, audit_head_hash, "
+                "recorded_by, authorized_event_uid, executed_event_uid, verified_event_uid, "
+                "created_at) VALUES (?,?,?,'simulated',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (rid, request.incident_id, request.id, request.action, request.asset_id,
+                 plan_id, plan_sha256, step_id, step_sha256, report_sha256,
+                 evidence_fingerprint, environment_sha256, outcome, _j(criteria), head,
+                 recorder_id, authorized_event_uid, executed.uid, verified.uid, executed.ts))
+        return self.execution_record_for(request.id)
 
     # --- snapshot for the policy engine -----------------------------------------
     def snapshot(self, incident_id: str, now: datetime | None = None) -> IncidentSnapshot:

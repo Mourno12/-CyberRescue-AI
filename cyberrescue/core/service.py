@@ -18,6 +18,7 @@ Trust boundary (the reason this module exists):
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from typing import Any
 
 from cyberrescue.core import db
 from cyberrescue.core.audit import AuditEvent, AuditLog, VerifyResult, utcnow
-from cyberrescue.core.catalog import get_action, match_actions_in_text
+from cyberrescue.core.catalog import ASSET_BOUND_ACTIONS, get_action, match_actions_in_text
 from cyberrescue.core.evidence import EvidenceEnvelope, parse_envelope, prepare_record
 from cyberrescue.core.evidence_store import EvidenceStore, EvidenceVerifyResult
 from cyberrescue.core.holds import assess_holds
@@ -43,6 +44,7 @@ from cyberrescue.core.models import (
     EventType,
     EvidenceRecord,
     EvidenceRelation,
+    ExecutionRecord,
     Finding,
     FindingEvidence,
     Incident,
@@ -74,6 +76,18 @@ class CollectorError(PermissionError):
 
 class CitationError(PermissionError):
     """Raised when an actor may not link evidence to a finding."""
+
+
+class ExecutionError(PermissionError):
+    """Raised when a simulated execution may not be recorded."""
+
+
+# Phase 6: the only actor role that may record a simulated execution.
+EXECUTOR_ROLE = "executor"
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_STEP_ID = re.compile(r"^STEP-[0-9a-f]{12}$")
+_PLAN_ID = re.compile(r"^PLAN-[0-9a-f]{16}$")
+_CHECK = re.compile(r"^[a-z][a-z_]{0,63}$")
 
 
 # Humans who may submit evidence (system collectors always may; agents never).
@@ -524,6 +538,130 @@ class CoreService:
             expires_at=(self.clock() + timedelta(minutes=ttl)).isoformat(),
             overrides_hold=overrides_hold, overrides_veto=overrides_veto,
             concerns_uid=concerns, source=source)
+
+    # --- simulated execution records (Phase 6) ------------------------------------------
+    def record_simulated_execution(
+            self, incident_id: str, *, request_id: str, recorder_actor_id: str, plan_id: str,
+            plan_sha256: str, step_id: str, step_sha256: str, report_sha256: str,
+            evidence_fingerprint: str, environment_sha256: str, outcome: str,
+            criteria: list[dict[str, Any]], source: str = "core") -> ExecutionRecord:
+        """THE ONLY WAY TO RECORD AN EXECUTION - and only a SIMULATED one.
+
+        Re-checks everything itself (the caller is never trusted), inside one
+        BEGIN IMMEDIATE transaction so the checks and the write cannot interleave:
+
+        * the recorder is a registered SYSTEM actor with role ``executor``;
+        * the incident exists and is open;
+        * the request belongs to THIS incident, is ``authorized``, is a tier-1/2
+          non-destructive catalogue action, has an ALLOW decision with the
+          ``ACTION_AUTHORIZED`` event linked to it, and was requested by an actor
+          policy rule P1 allows;
+        * binding: a request carrying ``params.plan_step`` must name ``step_id``;
+          one without it is accepted only for asset-bound actions;
+        * the authorization is not older than the approval lifetime
+          (``PolicyConfig.approval_ttl_minutes``, $CYBERRESCUE_APPROVAL_TTL_MINUTES);
+        * ``evidence_fingerprint`` equals the incident's evidence now;
+        * the policy engine does not DENY the request now;
+        * the request has no execution record yet (the database's UNIQUE
+          constraint backs this up).
+
+        Writes ACTION_EXECUTED, ACTION_VERIFIED and the record. Never changes the
+        request's status, the incident's state, approvals, sign-offs or actors.
+        """
+        def refuse(reason: str) -> None:
+            raise ExecutionError(f"cannot record execution: {reason}")
+
+        recorder = self._registered(recorder_actor_id)
+        if not (recorder.kind == ActorKind.SYSTEM and recorder.role == EXECUTOR_ROLE):
+            refuse(f"{recorder.kind.value}/{recorder.role} is not the executor")
+        for name, value, pattern in (
+                ("plan_id", plan_id, _PLAN_ID), ("step_id", step_id, _STEP_ID),
+                ("plan_sha256", plan_sha256, _HEX64), ("step_sha256", step_sha256, _HEX64),
+                ("report_sha256", report_sha256, _HEX64),
+                ("evidence_fingerprint", evidence_fingerprint, _HEX64),
+                ("environment_sha256", environment_sha256, _HEX64)):
+            if not isinstance(value, str) or not pattern.match(value):
+                refuse(f"{name} is malformed")
+        if outcome not in ("succeeded", "failed"):
+            refuse("outcome must be 'succeeded' or 'failed'")
+        if not isinstance(criteria, list) or not criteria or not all(
+                isinstance(c, dict) and set(c) == {"check", "satisfied"}
+                and isinstance(c["check"], str) and _CHECK.match(c["check"])
+                and isinstance(c["satisfied"], bool) for c in criteria):
+            refuse("criteria must be a non-empty list of {check, satisfied}")
+        if outcome == "succeeded" and not all(c["satisfied"] for c in criteria):
+            refuse("a success needs every criterion satisfied")
+
+        with db.transaction(self.conn):
+            inc = self._incident(incident_id)
+            if inc.is_terminal:
+                refuse(f"incident {inc.id} is {inc.status.value}")
+            req = self.store.get_action_request(request_id) \
+                if isinstance(request_id, str) else None
+            if req is None or req.incident_id != inc.id:
+                refuse("the request does not belong to this incident")
+            if req.status != ActionStatus.AUTHORIZED:
+                refuse(f"the request is {req.status.value}, not authorized")
+            spec = get_action(req.action)
+            if spec is None or spec.tier not in (ActionTier.LOW, ActionTier.CONTAINMENT) \
+                    or spec.destructive or req.tier != int(spec.tier):
+                refuse("only tier-1/2 non-destructive actions can be recorded")
+            rows = self.store.decisions_for(req.id)
+            if not rows or rows[-1]["outcome"] != PolicyOutcome.ALLOW.value:
+                refuse("the request has no ALLOW decision")
+            decision_uid = rows[-1]["event_uid"]
+            auth = next((e for e in self.audit.events(inc.id,
+                                                      event_type=EventType.ACTION_AUTHORIZED)
+                         if e.payload.get("request_id") == req.id
+                         and any(LinkRelation(lk.relation) == LinkRelation.AUTHORIZES
+                                 and lk.target_uid == decision_uid for lk in e.links)), None)
+            if auth is None:
+                refuse("no ACTION_AUTHORIZED event is linked to the request's decision")
+            requester = self.store.get_actor(req.requested_by) if req.requested_by else None
+            cfg = self.config
+            if requester is None or not (
+                    (requester.kind == ActorKind.AGENT
+                     and requester.role in cfg.agent_requester_roles)
+                    or (requester.kind == ActorKind.HUMAN
+                        and requester.role in cfg.human_requester_roles)):
+                refuse("the request was not made by an actor allowed to request actions")
+            bound = req.params.get("plan_step")
+            if bound is not None and bound != step_id:
+                refuse("the authorization names a different plan step")
+            if bound is None and req.action not in ASSET_BOUND_ACTIONS:
+                refuse(f"{req.action} needs an authorization bound to its plan step "
+                       "(params.plan_step)")
+            now = self.clock()
+            if now - datetime.fromisoformat(auth.ts) > timedelta(
+                    minutes=cfg.approval_ttl_minutes):
+                refuse(f"the authorization is older than {cfg.approval_ttl_minutes} minutes")
+            if evidence_fingerprint != self.store.evidence_fingerprint(inc.id):
+                refuse("evidence_fingerprint does not match the incident's evidence")
+            existing = self.store.execution_record_for(req.id)
+            if existing is not None:
+                refuse(f"the request was already executed (record {existing.id})")
+            current = self.engine.evaluate(action=req.action, asset_id=req.asset_id,
+                                           requester=requester,
+                                           snapshot=self.store.snapshot(inc.id, now))
+            if PolicyOutcome(current.outcome) == PolicyOutcome.DENY:
+                refuse(f"current policy denies the action ({', '.join(current.rules_failed)})")
+            try:
+                return self.store.add_execution_record(
+                    req, recorder_id=recorder.id, authorized_event_uid=auth.uid,
+                    plan_id=plan_id, plan_sha256=plan_sha256, step_id=step_id,
+                    step_sha256=step_sha256, report_sha256=report_sha256,
+                    evidence_fingerprint=evidence_fingerprint,
+                    environment_sha256=environment_sha256, outcome=outcome,
+                    criteria=[{"check": c["check"], "satisfied": c["satisfied"]}
+                              for c in criteria], source=source)
+            except sqlite3.IntegrityError as e:
+                refuse(f"rejected by the database ({e})")
+
+    def execution_records(self, incident_ref: str) -> list[ExecutionRecord]:
+        iid = self.store.resolve_incident(incident_ref)
+        if iid is None:
+            raise CoreError(f"no Core incident for {incident_ref!r}")
+        return self.store.execution_records(iid)
 
     # --- evidence (Phase 2A) ----------------------------------------------------------
     # Evidence is externally observed data. Only collectors — a SYSTEM actor, or

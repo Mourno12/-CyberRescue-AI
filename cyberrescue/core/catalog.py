@@ -52,6 +52,12 @@ _SPECS = [
 
 CATALOG: dict[str, ActionSpec] = {s.name: s for s in _SPECS}
 
+# Actions whose (incident, action, asset id) fully identifies WHAT is done, so an
+# authorization's own scope binds it to a plan step. Every other action names a
+# process, file, address or account the scope cannot express: its request must
+# carry ``params.plan_step`` (Phase 5/6 binding rule).
+ASSET_BOUND_ACTIONS = frozenset({"isolate_host", "preserve_disk_image", "notify_stakeholders"})
+
 
 def get_action(name: str | None) -> ActionSpec | None:
     return CATALOG.get((name or "").strip())
