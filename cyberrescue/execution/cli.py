@@ -1,7 +1,8 @@
-"""Command-line interface for the SIMULATED executor - every command is read-only.
+"""Command-line interface for the SIMULATED executor.
 
     python -m cyberrescue.execution [--db PATH] [--protected-accounts FILE] simulate \
-        --plan PLAN.json [--format json|md|html] [--out FILE]
+        --plan PLAN.json [--format json|md|html] [--out FILE] \
+        [--record --recorder <system/executor actor id>]
     python -m cyberrescue.execution [--db PATH] [--protected-accounts FILE] show \
         --plan PLAN.json --id STEP-...|DEC-... [--json]
     python -m cyberrescue.execution [--db PATH] [--protected-accounts FILE] verify \
@@ -10,10 +11,13 @@
 There is deliberately no command that executes anything for real, and none
 that requests, approves or authorizes: authorizations come only from the
 Core (``python -m cyberrescue.core request`` / ``approve``, or the Commander
-gate). The database is opened mode=ro and never created; only
-``simulate --out FILE`` writes, and only that file. Every run prints the
-SIMULATION ONLY banner on stderr. Exit codes: 0 ok, 1 verify mismatch,
-2 error (missing database, invalid plan, unknown id).
+gate). The database is opened mode=ro and never created. Writes happen only
+with an explicit flag: ``simulate --out FILE`` writes that file, and
+``simulate --record`` (Phase 6) asks the Core to record each simulated step
+through ``CoreService.record_simulated_execution`` (mode ``simulated``; the
+Core re-checks everything and refuses replays). Every run prints the
+SIMULATION ONLY banner on stderr. Exit codes: 0 ok, 1 verify mismatch or a
+refused record, 2 error (missing database, invalid plan, unknown id).
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from pathlib import Path
 from cyberrescue.core.audit import canonical_json
 from cyberrescue.execution.executor import simulate_plan, verify_report
 from cyberrescue.execution.export import BANNER, FORMATS, render
+from cyberrescue.execution.recorder import record_plan
 from cyberrescue.investigation.export import plain_text
 from cyberrescue.investigation.readonly import ReadOnlyError, open_readonly
 from cyberrescue.response.export import preview_text
@@ -46,14 +51,28 @@ def _plan_text(args) -> str:
 
 
 def _cmd_simulate(core, args) -> int:
-    text = render(simulate_plan(core, _plan_text(args), protected=_protected(args)),
-                  args.format)
+    code = 0
+    if args.record:
+        if not args.recorder:
+            raise ValueError("--record needs --recorder <id of the Core's system/executor actor>")
+        result = record_plan(args.db, _plan_text(args), recorder_actor_id=args.recorder,
+                             protected=_protected(args))
+        report = result.report
+        for o in result.outcomes:
+            print(f"[simulation] {'recorded' if o.recorded else 'NOT recorded'} "
+                  f"{p(o.step_id)}: {p(o.record_id or o.reason)}", file=sys.stderr)
+        print(f"[simulation] recorded {len(result.recorded)} simulated execution(s) in the "
+              f"Core (mode simulated); {len(result.refused)} refused", file=sys.stderr)
+        code = 1 if result.refused else 0
+    else:
+        report = simulate_plan(core, _plan_text(args), protected=_protected(args))
+    text = render(report, args.format)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8", newline="\n")
         print(f"[simulation] wrote {args.format} report to {args.out}", file=sys.stderr)
     else:
         sys.stdout.write(text)
-    return 0
+    return code
 
 
 def _cmd_show(core, args) -> int:
@@ -107,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--plan", required=True, help="a JSON plan from `cyberrescue.response plan`")
     s.add_argument("--format", choices=FORMATS, default="json")
     s.add_argument("--out", default=None, help="write to this file instead of stdout")
+    s.add_argument("--record", action="store_true",
+                   help="also record each simulated step in the Core (ACTION_EXECUTED / "
+                        "ACTION_VERIFIED, mode simulated); the Core re-checks every step")
+    s.add_argument("--recorder", default=None,
+                   help="id of the Core's registered system/executor actor (with --record)")
     s.set_defaults(fn=_cmd_simulate)
 
     sh = sub.add_parser("show", help="explain one step or decision point of a simulation")

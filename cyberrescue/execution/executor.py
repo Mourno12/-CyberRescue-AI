@@ -15,7 +15,8 @@
                   parameters, citations, criteria); the catalogue agrees it is
                   a tier-1/2, non-destructive action;
    * target     - re-validated now (inventory, address, protected accounts);
-   * dependency - every step it comes ``after`` SUCCEEDED in this run;
+   * dependency - every step it comes ``after`` SUCCEEDED in this run, or has a
+                  succeeded Core execution record for this plan (Phase 6);
    * support    - a simulated handler exists (else UNSUPPORTED);
    * authorization - the Core already authorized it (``authorization.py``);
    * policy     - no current DENY and no unconsidered veto;
@@ -118,6 +119,8 @@ class _Run:
     records: list
     as_of: str = ""
     max_age_minutes: int = 60
+    # Phase 6: steps with a SUCCEEDED Core execution record satisfy dependants.
+    recorded_ok: frozenset[str] = frozenset()
     used: set[str] = field(default_factory=set)
     status: dict[str, str] = field(default_factory=dict)
 
@@ -165,7 +168,8 @@ class _Run:
         if not check("target", tc is None or tc.ok,
                      "target re-validated" if tc is None or tc.ok else tc.reason):
             return stop("BLOCKED", "target", f"target refused: {tc.reason}")
-        pending = [a for a in step.after if self.status.get(a) != "SUCCEEDED"]
+        pending = [a for a in step.after if self.status.get(a) != "SUCCEEDED"
+                   and a not in self.recorded_ok]
         if not check("dependencies", not pending, "every prerequisite step succeeded"
                      if not pending else f"{len(pending)} prerequisite step(s) did not succeed"):
             return stop("BLOCKED", "dependency", "a prerequisite step did not succeed in this "
@@ -241,7 +245,10 @@ def simulate_plan(core: ReadOnlyCore, plan_json: str, *,
                previewer=Previewer(readonly_snapshot(core, iid, fresh.as_of), as_of=fresh.as_of),
                protected=protected, records=core_authorizations(core, iid),
                as_of=fresh.as_of,
-               max_age_minutes=PolicyConfig.from_env().approval_ttl_minutes)
+               max_age_minutes=PolicyConfig.from_env().approval_ttl_minutes,
+               recorded_ok=frozenset(r.step_id for r in core.store.execution_records(iid)
+                                     if r.outcome == "succeeded"
+                                     and r.plan_sha256 == plan.plan_sha256))
     steps = tuple(run.step(s) for s in sorted(plan.steps, key=lambda s: s.order))
     decisions = tuple(run.decision(d) for d in plan.decision_points)
 

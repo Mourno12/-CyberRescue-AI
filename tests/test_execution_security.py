@@ -300,7 +300,10 @@ REAL_WORLD = {"subprocess", "socket", "os", "shutil", "urllib", "http", "request
 @pytest.mark.parametrize("path", MODULES, ids=lambda p: p.stem)
 def test_5_13_no_authority_gate_execution_or_nondeterminism(path):
     names = _names(_tree(path))
-    assert not names & (AUTHORITY - {"system"}), names & AUTHORITY
+    # Phase 6: recorder.py is the single writer; it may open the Core and call
+    # only record_simulated_execution (pinned in test_execution_recorder.py).
+    writer = {"recorder": {"CoreService"}}.get(path.stem, set())
+    assert not names & (AUTHORITY - {"system"}) - writer, names & AUTHORITY
     assert not names & {"CommanderGate", "check_commander_action", "audit_append",
                         "add_approval", "add_signoff", "add_veto", "PolicyEngine"}
     assert not names & NONDETERMINISM
