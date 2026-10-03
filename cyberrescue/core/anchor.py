@@ -52,9 +52,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from cyberrescue.core.audit import utcnow
+from cyberrescue.core.audit import SYSTEM_CHAIN, AuditLog, utcnow
 from cyberrescue.core.db import REPO_ROOT
 
 KEY_FILE_ENV = "CYBERRESCUE_ANCHOR_KEY_FILE"
@@ -334,3 +334,122 @@ def open_signed(text: str, key: AnchorKey) -> Checkpoint:
         raise AnchorSignatureError("the anchor's HMAC does not match: the anchor was altered "
                                    "or a different key is used")
     return checkpoint
+
+
+# --- verification (7-3) ------------------------------------------------------------------
+
+ChainStatus = Literal["ok", "grown", "rewritten", "truncated", "missing", "broken",
+                      "unanchored"]
+GOOD_STATUSES = frozenset({"ok", "grown", "unanchored"})
+
+
+@dataclass(frozen=True)
+class ChainResult:
+    """One chain compared with the anchor.
+
+    ok         - the anchored head is still the chain's head
+    grown      - the anchored event is intact and the chain has grown since (valid)
+    rewritten  - the event at the anchored seq has a different hash (prefix rewritten)
+    truncated  - the chain no longer reaches the anchored seq (tail deleted)
+    missing    - an anchored chain is absent from the database
+    broken     - the chain fails the existing AuditLog.verify recomputation
+    unanchored - a chain created after the anchor (informational, not a failure)
+    """
+    chain: str
+    status: ChainStatus
+    anchored_seq: int | None
+    current_seq: int | None
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status in GOOD_STATUSES
+
+
+@dataclass(frozen=True)
+class AnchorVerifyResult:
+    """A VALID (authenticated) anchor compared with the database. Malformed or
+    unauthenticated anchors never get this far: they raise AnchorFormatError /
+    AnchorSignatureError."""
+    created_at: str
+    schema_ok: bool
+    anchored_schema_version: int
+    current_schema_version: int
+    chains: tuple[ChainResult, ...]
+
+    @property
+    def ok(self) -> bool:
+        return self.schema_ok and all(c.ok for c in self.chains)
+
+    @property
+    def errors(self) -> list[str]:
+        out = [] if self.schema_ok else [
+            f"schema version is {self.current_schema_version}, the anchor recorded "
+            f"{self.anchored_schema_version}"]
+        return out + [f"{c.chain}: {c.status} - {c.detail}" for c in self.chains if not c.ok]
+
+
+def verify_checkpoint(conn: sqlite3.Connection, signed: str, key: AnchorKey,
+                      incident: str | None = None) -> AnchorVerifyResult:
+    """Authenticate ``signed`` (strict 7-2 parsing + HMAC) and compare it with the
+    database: per anchored chain, the event at the anchored seq must exist with
+    the anchored hash, and the whole chain must pass ``AuditLog.verify``. Growth
+    after the anchor is valid. ``incident`` restricts the comparison to that
+    incident's chain (which the anchor must contain). Read-only.
+
+    ``conn`` must return ``sqlite3.Row`` rows (a Core connection, or a read-only
+    connection with ``row_factory = sqlite3.Row``), as ``AuditLog`` requires.
+    """
+    checkpoint = open_signed(signed, key)              # raises on malformed / bad HMAC
+    if conn.row_factory is not sqlite3.Row:
+        raise AnchorError("verification needs a Core connection (row_factory sqlite3.Row)")
+    log = AuditLog(conn)
+    version = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                           ).fetchone()
+    current_version = int(version[0]) if version else 0
+    present = [r[0] for r in conn.execute(
+        "SELECT DISTINCT chain FROM audit_events ORDER BY chain")]
+    if incident is not None:
+        if incident not in checkpoint.chains:
+            raise AnchorError("the anchor does not cover that incident's chain")
+        wanted = [incident]
+    else:
+        wanted = sorted(set(checkpoint.chains) | set(present))
+
+    results = []
+    for chain in wanted:
+        head = checkpoint.chains.get(chain)
+        last = conn.execute("SELECT MAX(seq) FROM audit_events WHERE chain = ?",
+                            (chain,)).fetchone()[0]
+        if head is None:
+            results.append(ChainResult(chain, "unanchored", None, last,
+                                       "created after the anchor"))
+            continue
+        if last is None:
+            results.append(ChainResult(chain, "missing", head.seq, None,
+                                       "the anchored chain is absent from the database"))
+            continue
+        row = conn.execute("SELECT hash FROM audit_events WHERE chain = ? AND seq = ?",
+                           (chain, head.seq)).fetchone()
+        if row is None:
+            results.append(ChainResult(chain, "truncated", head.seq, last,
+                                       f"the anchored seq {head.seq} no longer exists"))
+            continue
+        if not hmac.compare_digest(str(row[0]), head.hash):
+            results.append(ChainResult(chain, "rewritten", head.seq, last,
+                                       f"the event at seq {head.seq} has a different hash"))
+            continue
+        full = log.verify(None if chain == SYSTEM_CHAIN else chain)
+        if not full.ok:
+            results.append(ChainResult(chain, "broken", head.seq, last,
+                                       "the chain fails audit verification: "
+                                       + "; ".join(full.errors[:3])))
+            continue
+        results.append(ChainResult(chain, "ok" if last == head.seq else "grown", head.seq,
+                                   last, "" if last == head.seq
+                                   else f"{last - head.seq} event(s) after the anchor"))
+    return AnchorVerifyResult(created_at=checkpoint.created_at,
+                              schema_ok=current_version == checkpoint.schema_version,
+                              anchored_schema_version=checkpoint.schema_version,
+                              current_schema_version=current_version,
+                              chains=tuple(results))
