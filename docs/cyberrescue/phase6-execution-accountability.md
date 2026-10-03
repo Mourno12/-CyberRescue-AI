@@ -221,12 +221,13 @@ The WarRoom Commander's tools are unchanged; they only use asset-bound actions.
 
 * **A forged trailing accountability event does not move the case.** This is deliberate: one
   appended with valid hashes by someone with raw write access to the database file is caught by
-  `verify_accountability` (it has no record), not by `verify-case`. As before, truncating the
-  chain's tail needs an anchored head to detect.
+  `verify_accountability` (it has no record), not by `verify-case`. Truncating the chain's tail
+  is detected by a Phase 7 external anchor taken before the truncation (`core verify --anchor`).
 * **IP and account targets** are still invisible to policy (G5): `block_ip`/`disable_account`
   requests carry no asset id, and binding them relies on `params.plan_step`.
-* **The audit chain is still tamper-evident, not keyed or anchored.** Records store the head
-  hash at recording time, which is a partial anchor.
+* **The audit chain itself is unkeyed.** Phase 7 adds keyed *external* anchors
+  ([phase7-audit-anchoring.md](phase7-audit-anchoring.md)), which make rewriting or truncating
+  any anchored prefix detectable. Records still also store the head hash at recording time.
 * **The executor actor is registered by an operator** with local Core access, like collectors.
   The Core cannot tell a well-behaved executor process from another process holding that actor
   id.

@@ -131,8 +131,9 @@ Phase 4: ACTION_EXECUTED ─executes─► ACTION_AUTHORIZED; ACTION_VERIFIED �
 
 Limits: tamper-*evident*, not tamper-proof (a writer with raw file access can
 drop triggers and recompute hashes), and truncating a chain's tail needs an
-anchored head hash to detect. Both are planned for a later phase (HMAC key /
-head hash in the exported report).
+anchored head hash to detect. Both are now addressed by Phase 7's keyed external anchors
+(`core anchor` / `core verify --anchor`), without changing the chain's hash formula — see
+[phase7-audit-anchoring.md](phase7-audit-anchoring.md).
 
 ## Incident IDs
 

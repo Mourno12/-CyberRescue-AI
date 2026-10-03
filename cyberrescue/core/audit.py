@@ -9,11 +9,14 @@ incident (``chain = incident_id``; incident-less events use ``__system__``):
 broken back-pointers, edited bodies, and edited links. SQLite triggers
 (``db.py``) additionally make UPDATE/DELETE on the log fail outright.
 
-This is tamper-*evident*, not tamper-*proof*: someone with raw write access to
-the file could drop the triggers and recompute every hash. A later phase can
-key the hash (HMAC with a secret from ``.env``) or anchor the chain head in the
-exported report. Truncating the *tail* of a chain is only detectable against
-an anchored head — also a later-phase item.
+On its own this is tamper-*evident*, not tamper-*proof*: someone with raw
+write access to the file could drop the triggers and recompute every hash, and
+truncating the *tail* of a chain leaves no trace in the chain itself. Phase 7
+closes both gaps WITHOUT changing this hash formula: ``core/anchor.py`` writes
+external checkpoints of every chain head, signed with HMAC-SHA256 under a key
+kept outside the database and the repository, and ``core verify --anchor``
+detects any rewrite or truncation of the anchored prefix (see
+``docs/cyberrescue/phase7-audit-anchoring.md``).
 """
 
 from __future__ import annotations
