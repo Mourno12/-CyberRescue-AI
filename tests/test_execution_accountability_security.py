@@ -300,24 +300,16 @@ def test_dry_runs_leave_case_and_plan_hashes_unchanged(db):
 
 
 def test_cases_and_plans_never_contain_execution_data(db):
-    """Recording appends audit events, which (by Phase 3 design) move the case's
-    as_of and its audit count/head - and through them the plan's ids and preview
-    times. Nothing else changes: no execution record reaches either document."""
+    """Cases are anchored before trailing accountability events (Phase 6 boundary):
+    recording leaves the case and the plan byte-identical, and no execution data
+    reaches either document."""
     plan = plans_of(db)["INC-A"]
     request(db, plan)
     case1, plan1 = _docs(db, "INC-A")
     res = record_plan(db, plan.to_json(), recorder_actor_id=_executor(db))
+    assert res.recorded
     case2, plan2 = _docs(db, "INC-A")
-    c1, c2 = case1.content(), case2.content()
-    assert {k for k in c1 if c1[k] != c2[k]} == {"as_of", "integrity"}
-    assert {k for k in c1["integrity"] if c1["integrity"][k] != c2["integrity"][k]} == \
-        {"audit_events", "audit_head_hash"}
-    strip = lambda items: [{k: v for k, v in x.items() if k != "preview"}  # noqa: E731
-                           for x in items]
-    p1, p2 = plan1.content(), plan2.content()
-    assert strip(p1["steps"]) == strip(p2["steps"])
-    assert strip(p1["decision_points"]) == strip(p2["decision_points"])
-    assert (p1["tasks"], p1["notes"], p1["inputs"]) == (p2["tasks"], p2["notes"], p2["inputs"])
+    assert case2.to_json() == case1.to_json() and plan2.to_json() == plan1.to_json()
     text = case2.to_json() + plan2.to_json()
     for o in res.recorded:
         assert o.record_id not in text

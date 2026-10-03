@@ -169,8 +169,13 @@ with no decision. A request evaluated by the Core shows its outcome, e.g.
 
 ## Determinism and verification
 
-* No wall clock is used. `as_of` is the timestamp of the incident chain's last audit event,
-  and ids are content-derived.
+* No wall clock is used. `as_of` is the timestamp of the case's **audit anchor**, and ids are
+  content-derived. The anchor is the incident chain's last event, except that trailing Phase 6
+  accountability events (`ACTION_EXECUTED`, `ACTION_VERIFIED`) are skipped. Their records are
+  verified on the execution side (`phase6-execution-accountability.md`).
+  * `integrity.audit_head_hash` and `integrity.audit_events` are the anchor's hash and sequence
+    number.
+  * `integrity.audit_chain_ok` still verifies the whole chain.
 * **The same database state always produces a byte-identical case.**
 * `case_sha256` is the sha256 of the canonical content.
 * `verify-case` re-hashes the document, which detects an edited export, and rebuilds the case

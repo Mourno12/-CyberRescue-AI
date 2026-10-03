@@ -17,7 +17,7 @@ record a real execution.**
 | Q3 | `action_requests.status` stays `authorized`; `execution_records` is the source of truth |
 | Q4 | Maximum authorization age = the approval lifetime (60 min, `CYBERRESCUE_APPROVAL_TTL_MINUTES`) |
 | Q5 | `core request --plan-step` |
-| Q6 | Phase 3 cases and Phase 4 plans show no execution data (see "Phase 3/4 documents" for what that does and does not mean) |
+| Q6 | Phase 3 cases and Phase 4 plans contain no execution data, and recording leaves `case_sha256` and `plan_sha256` unchanged (see "Phase 3/4 documents: the identity boundary") |
 
 ## Schema v3
 
@@ -155,28 +155,46 @@ python -m cyberrescue.evaluation run --accountability
 | Replaying a recorded simulation is idempotent (A, B, C) | `test_execution_accountability_security.py`, `test_execution_recorder.py` |
 | Phase 5 dry-run behaviour unchanged when there are no records; all Phase 5 tests unchanged except one AST allow-list entry for `recorder.py` | `test_execution_spent.py`, Phase 5 suite |
 
-## Phase 3/4 documents
+## Phase 3/4 documents: the identity boundary
 
-Neither the Phase 3 case nor the Phase 4 plan contains execution data.
+A case/plan's identity covers its **semantic content** and the audit state it was built from.
+It does not cover accountability events appended after it:
 
-**Unchanged:**
-* `case_sha256` and `plan_sha256` are unchanged by the v2 → v3 migration and by dry runs.
-* After recording, plan steps (except their previews), decision points, tasks, notes and inputs
-  are identical.
-* Recorded step hashes still bind to the rebuilt plan.
+```text
+Case/Plan identity  =  semantic content  +  audit ANCHOR (hash commits to the whole prefix)
+                       +  audit_chain_ok over the ENTIRE chain (tail included)
+Execution accountability  =  ACTION_EXECUTED / ACTION_VERIFIED after the anchor
+                             +  execution_records  (verify_accountability, verify_recorded)
+```
 
-**Changed by recording.** Recording appends two audit events per step, and Phase 3 binds a case
-to its incident's audit chain *by design*:
-* `as_of` is the last audit event;
-* `integrity` holds the event count and head hash.
+**The anchor.** The Phase 3 builder (`case_anchor`) anchors a case at the incident chain's last
+event that is not a *trailing* `ACTION_EXECUTED`/`ACTION_VERIFIED`. From the anchor it takes:
+* `as_of`;
+* `integrity.audit_head_hash`;
+* `integrity.audit_events` (the anchor's sequence number).
 
-So, exactly as after any audited Core event (an approval, a request), the case's `as_of` and
-those two integrity fields change, and with them `case_sha256`. In the plan, `plan_id`, `as_of`,
-`case_sha256` and the preview timestamps change too.
+The plan derives its id, `as_of` and previews from the case.
 
-Keeping the hashes literally constant would require the Phase 3 builder to ignore execution
-events. That would change Phase 3 and weaken `verify-case`, so it was not done; see the
-limitations.
+**Consequences:**
+* **Recording leaves both documents byte-identical.** `case_sha256` and `plan_sha256` are
+  unchanged, and `verify-case`/`verify-plan` still pass.
+* **Normal events still move the anchor.** Any other audited event (an approval, a request,
+  evidence) moves it as before, and a later event makes earlier accountability events part of
+  the anchored prefix.
+* **Older cases are unaffected.** For chains with no trailing accountability events every value
+  is identical to the pre-Phase-6 definition, so earlier exports still verify.
+
+**Tamper detection, by location:**
+
+| What is tampered with | Detected by |
+|---|---|
+| Case or plan content | Self-hash and rebuild (`verify-case` / `verify-plan`) |
+| Evidence | The rebuild (fingerprint, evidence integrity) |
+| Any audit event, before or after the anchor | `audit_chain_ok`, which verifies the whole chain and so changes the case and fails `verify-case`/`verify-plan` |
+| An execution record row | `verify_accountability`, `verify_recorded` (record against its events) |
+| An extra, correctly chained accountability event | `verify_accountability`: it has no record |
+
+Tests: `tests/test_case_plan_hash_boundary.py`.
 
 ## Scenario results (`--accountability`)
 
@@ -201,8 +219,10 @@ The WarRoom Commander's tools are unchanged; they only use asset-bound actions.
 
 ## Known limitations
 
-* **Phase 3/4 hashes move after recording** (above). That is by Phase 3 design; changing it is a
-  decision for a later phase.
+* **A forged trailing accountability event does not move the case.** This is deliberate: one
+  appended with valid hashes by someone with raw write access to the database file is caught by
+  `verify_accountability` (it has no record), not by `verify-case`. As before, truncating the
+  chain's tail needs an anchored head to detect.
 * **IP and account targets** are still invisible to policy (G5): `block_ip`/`disable_account`
   requests carry no asset id, and binding them relies on `params.plan_step`.
 * **The audit chain is still tamper-evident, not keyed or anchored.** Records store the head

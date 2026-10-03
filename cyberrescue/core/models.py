@@ -96,6 +96,15 @@ class EventType(str, Enum):
     ACTION_VERIFIED = "ACTION_VERIFIED"
 
 
+# Post-plan ACCOUNTABILITY events: they record what happened to an authorization
+# after a case/plan was built. A Phase 3 case anchors its audit state at the
+# last event that is NOT one of these (see investigation/builder.case_anchor),
+# so recording an execution does not change an existing case/plan identity,
+# while the full chain - these events included - is still verified.
+ACCOUNTABILITY_EVENT_TYPES = frozenset({EventType.ACTION_EXECUTED.value,
+                                        EventType.ACTION_VERIFIED.value})
+
+
 class LinkRelation(str, Enum):
     """Typed edge from a NEWER audit event to an OLDER one it refers to.
 

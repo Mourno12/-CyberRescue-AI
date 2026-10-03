@@ -2,10 +2,23 @@
 
 ``build_case`` assembles every component for one incident from a
 ``ReadOnlyCore``. Nothing depends on the wall clock: ``as_of`` is the timestamp
-of the incident's last audit event, ids are content-derived, and the case's
+of the case's audit ANCHOR, ids are content-derived, and the case's
 ``case_sha256`` is the sha256 of its canonical content. ``verify_case``
 recomputes that hash (detects an edited export) and rebuilds the case from the
 database (detects a changed database).
+
+The audit anchor (Phase 6 boundary). A case is anchored at the incident
+chain's last event that is not a trailing post-plan ACCOUNTABILITY event
+(``ACTION_EXECUTED`` / ``ACTION_VERIFIED``, see ``case_anchor``): ``as_of``,
+``integrity.audit_head_hash`` and ``integrity.audit_events`` (the anchor's
+sequence number) come from it. The chain is hash-linked, so the anchor hash
+commits to every event before it. ``integrity.audit_chain_ok`` still verifies
+the ENTIRE chain, accountability events included, so tampering anywhere
+changes the case and fails ``verify_case``. Recording a simulated execution
+after a case was built therefore leaves its identity unchanged; any other
+audited event (an approval, a request, evidence) moves the anchor as before.
+For chains without trailing accountability events every value is identical
+to the pre-Phase-6 definition.
 
 Raw evidence lines are excluded unless ``include_raw`` (then only for evidence
 the case cites, as ``Untrusted``).
@@ -18,6 +31,7 @@ import json
 from dataclasses import dataclass, field
 
 from cyberrescue.core.audit import canonical_json
+from cyberrescue.core.models import ACCOUNTABILITY_EVENT_TYPES
 from cyberrescue.detection.engine import DetectionEngine, load_view
 from cyberrescue.detection.model import digest
 from cyberrescue.investigation.claims import reconcile_claims
@@ -41,6 +55,14 @@ from cyberrescue.investigation.timeline import build_timeline
 
 def _sha(case: Case) -> str:
     return hashlib.sha256(canonical_json(case.content()).encode()).hexdigest()
+
+
+def case_anchor(events):
+    """The last event that is not a TRAILING accountability event (None if none).
+    Accountability events followed by any other event are part of the anchored
+    prefix like every other event."""
+    return next((e for e in reversed(events)
+                 if e.event_type not in ACCOUNTABILITY_EVENT_TYPES), None)
 
 
 def build_case(core: ReadOnlyCore, incident_ref: str, *, include_raw: bool = False) -> Case:
@@ -80,6 +102,7 @@ def build_case(core: ReadOnlyCore, incident_ref: str, *, include_raw: bool = Fal
     integrity_errors = integrity_by_evidence(core, iid)
     audit = core.audit.verify(iid)
     events = core.audit.events(iid)
+    anchor = case_anchor(events)
     evidence_check = core.evidence.verify(iid)
     raw = ()
     if include_raw:
@@ -90,7 +113,7 @@ def build_case(core: ReadOnlyCore, incident_ref: str, *, include_raw: bool = Fal
         case_id="CASE-" + digest(iid, view.fingerprint, *sorted(f.finding_id for f in findings),
                                  report.ruleset_version)[:16],
         incident_id=iid, aliases=tuple(core.store.aliases_of(iid)), title=untrusted(inc.title),
-        as_of=events[-1].ts if events else inc.created_at,
+        as_of=anchor.ts if anchor else inc.created_at,
         ruleset_version=report.ruleset_version, evidence_count=len(view.events),
         policy=build_policy_view(core, iid), findings=findings, detections=detections,
         observations=observations,
@@ -98,8 +121,9 @@ def build_case(core: ReadOnlyCore, incident_ref: str, *, include_raw: bool = Fal
         graph=build_graph(view), scope=scope, gaps=tuple(gaps), claims=tuple(claims),
         provenance=tuple(provenance_records(core, cited, citations=cites,
                                             integrity=integrity_errors)),
-        integrity={"audit_chain_ok": audit.ok, "audit_events": audit.checked,
-                   "audit_head_hash": events[-1].hash if events else None,
+        integrity={"audit_chain_ok": audit.ok,                    # the WHOLE chain
+                   "audit_events": anchor.seq if anchor else 0,     # anchored prefix
+                   "audit_head_hash": anchor.hash if anchor else None,
                    "evidence_ok": evidence_check.ok, "evidence_checked": evidence_check.checked,
                    "evidence_errors": list(evidence_check.errors),
                    "threat_intel_sha256": report.inputs["threat_intel_sha256"],

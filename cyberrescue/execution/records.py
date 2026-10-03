@@ -14,6 +14,9 @@ so a recorded report is verified by cross-checking instead of re-running:
 * each record against its two audit events (payload, links, recorder) - a
   row edited behind the triggers' back no longer matches its hash-chained
   events;
+* incident-wide: every ACTION_EXECUTED / ACTION_VERIFIED event belongs to a
+  record (``verify_accountability``) - this guards the tail of the chain that
+  case/plan identities are deliberately anchored before;
 * the incident's audit chain verifies.
 """
 
@@ -84,13 +87,31 @@ def verify_recorded(core: ReadOnlyCore, report_json: str, plan_json: str
         for k in expected:
             if expected[k] != actual[k]:
                 errors.append(f"record {rec.id}: {k} differs from the report")
-        errors += _against_events(core, rec)
     for step_id in sorted(set(simulated) - seen):
         errors.append(f"simulated step {step_id} has no Core execution record")
+    errors += verify_accountability(core, report.incident_id)
     audit = core.audit.verify(report.incident_id)
     if not audit.ok:
         errors.append("the incident's audit chain does not verify")
     return RecordsVerifyResult(not errors, len(records), errors)
+
+
+def verify_accountability(core: ReadOnlyCore, incident_id: str) -> list[str]:
+    """Incident-wide: every ACTION_EXECUTED / ACTION_VERIFIED event belongs to an
+    execution record and every record matches its events. Case/plan identities
+    are anchored BEFORE trailing accountability events (Phase 3 builder), so this
+    check - with the audit chain - is what protects that tail: an extra,
+    correctly hash-chained accountability event without a record is reported."""
+    errors: list[str] = []
+    records = core.store.execution_records(incident_id)
+    owned = {r.executed_event_uid for r in records} | {r.verified_event_uid for r in records}
+    for e in core.audit.events(incident_id):
+        if e.event_type in (EventType.ACTION_EXECUTED.value, EventType.ACTION_VERIFIED.value) \
+                and e.uid not in owned:
+            errors.append(f"{e.event_type} event {e.uid} has no execution record")
+    for rec in records:
+        errors += _against_events(core, rec)
+    return errors
 
 
 def _against_events(core: ReadOnlyCore, rec) -> list[str]:
