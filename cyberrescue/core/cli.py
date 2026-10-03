@@ -13,8 +13,10 @@
     python -m cyberrescue.core ingest-evidence events.jsonl --incident INC-C \
         --collector <actor-id>
     python -m cyberrescue.core evidence --incident INC-C [--kind network] [--host srv-db-01]
-    python -m cyberrescue.core verify [--incident INC-C]
+    python -m cyberrescue.core verify [--incident INC-C] [--anchor FILE [--key-file KEY]]
     python -m cyberrescue.core show --incident INC-C
+    python -m cyberrescue.core anchor-keygen --out KEY_FILE
+    python -m cyberrescue.core anchor --out ANCHOR_FILE [--key-file KEY]
 
 The database defaults to ``$CYBERRESCUE_DB_PATH`` or ``<repo>/cyberrescue.db``.
 ``approve`` is the minimal Phase 1 human-approval path; it calls
@@ -26,15 +28,46 @@ the request and its audited ACTION_PROPOSED event, on the incident's chain. It
 changes nothing about the policy decision; it only says which plan step an
 authorization is for (required to record kill_process / quarantine_file /
 block_ip / disable_account executions).
+
+External audit anchors (Phase 7, ``core/anchor.py``):
+
+* ``anchor-keygen`` writes a NEW key file (refuses to overwrite, refuses paths
+  inside the repository; the key is never printed);
+* ``anchor`` reads every audit chain head through a READ-ONLY connection and
+  writes a signed anchor file (never overwritten); it creates no audit event
+  and never creates a database;
+* ``verify --anchor`` prints the unchanged ``verify`` report, then compares
+  the database with the authenticated anchor (growth after the anchor is
+  valid; rewritten, truncated, missing or broken chains are not).
+
+The key comes from ``--key-file`` or ``$CYBERRESCUE_ANCHOR_KEY_FILE`` only.
+Exit codes: 0 verified; 1 the database does not match (or ``verify`` found
+tampering); 2 malformed input, missing/invalid key, an anchor that is
+malformed or fails its HMAC (altered, or a different key), or usage errors.
+Without ``--anchor``, ``verify`` behaves exactly as before.
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import sqlite3
 import sys
+from pathlib import Path
 
 from cyberrescue.core import db
+from cyberrescue.core.anchor import (
+    KEY_FILE_ENV,
+    MAX_ANCHOR_CHARS,
+    AnchorError,
+    AnchorFormatError,
+    build_checkpoint,
+    load_key,
+    open_signed,
+    sign_checkpoint,
+    verify_checkpoint,
+    write_new_key,
+)
 from cyberrescue.core.band_import import Roster, import_band_context
 from cyberrescue.core.evidence import load_envelopes_jsonl
 from cyberrescue.core.models import ApprovalDecision
@@ -114,7 +147,88 @@ def _cmd_approve(svc, args) -> int:
     return 0
 
 
+def _printable(value: str) -> str:
+    """Chain ids come from the database: print them as ASCII without control chars."""
+    return "".join(c if 32 <= ord(c) < 127 else f"\\u{ord(c):04x}" for c in str(value))
+
+
 def _cmd_verify(svc, args) -> int:
+    if args.anchor is None:
+        return _verify_core(svc, args)
+    # Phase 7: authenticate the anchor and load the key BEFORE any output, so a
+    # missing key or an invalid anchor exits 2 without a partial report.
+    key = load_key(args.key_file)
+    text = _read_anchor(args.anchor)
+    checkpoint = open_signed(text, key)
+    iid = _incident(svc, args.incident) if args.incident else None
+    if iid is not None and iid not in checkpoint.chains:
+        raise AnchorError("the anchor does not cover that incident's chain")
+    code = _verify_core(svc, args)                       # unchanged output first
+    res = verify_checkpoint(svc.conn, text, key, incident=iid)
+    print(f"[core] anchor {_printable(args.anchor)} (created {res.created_at}): "
+          f"{'OK' if res.ok else 'MISMATCH'}")
+    if not res.schema_ok:
+        print(f"  - schema version is {res.current_schema_version}, the anchor recorded "
+              f"{res.anchored_schema_version}")
+    for c in res.chains:
+        seqs = f"anchored seq {c.anchored_seq if c.anchored_seq is not None else '-'}, " \
+               f"now {c.current_seq if c.current_seq is not None else '-'}"
+        print(f"[core]   {_printable(c.chain)}: {c.status} ({seqs})"
+              + (f" - {_printable(c.detail)}" if c.detail else ""))
+    return 0 if code == 0 and res.ok else 1
+
+
+def _read_anchor(path: str) -> str:
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        raise AnchorFormatError("the anchor file cannot be read") from None
+    if len(raw) > MAX_ANCHOR_CHARS:
+        raise AnchorFormatError("the anchor document is malformed: too large")
+    try:
+        return raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise AnchorFormatError("the anchor document is malformed: not ASCII") from None
+
+
+def _cmd_anchor_keygen(args) -> int:
+    path = write_new_key(args.out)
+    print(f"[core] wrote a new anchor key to {_printable(path)} - keep it outside the "
+          "repository and away from the database; it is never printed")
+    return 0
+
+
+def _cmd_anchor(args) -> int:
+    key = load_key(args.key_file)                        # fail before touching anything
+    target = Path(args.db) if args.db else db.default_db_path()
+    if not target.is_file():
+        raise CoreError(f"no Core database at {target} (anchor never creates one)")
+    conn = sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        checkpoint = build_checkpoint(conn)              # read-only connection
+    except sqlite3.DatabaseError:
+        raise CoreError(f"{target} is not a readable Core database") from None
+    finally:
+        conn.close()
+    if checkpoint.schema_version != db.SCHEMA_VERSION:
+        # Every other core command migrates on open; an anchor of an older schema would
+        # be invalidated by that migration. Same rule as the read-only layers.
+        raise CoreError(f"database schema v{checkpoint.schema_version}, expected "
+                        f"v{db.SCHEMA_VERSION}; run `python -m cyberrescue.core init` first")
+    signed = sign_checkpoint(checkpoint, key)
+    try:
+        with open(args.out, "x", encoding="ascii", newline="\n") as f:
+            f.write(signed)
+    except FileExistsError:
+        raise CoreError("refusing to overwrite an existing anchor file; choose a new path") \
+            from None
+    print(f"[core] anchored {len(checkpoint.chains)} chain(s) (schema "
+          f"v{checkpoint.schema_version}) at {checkpoint.created_at} -> "
+          f"{_printable(args.out)}")
+    return 0
+
+
+def _verify_core(svc, args) -> int:
     results = ({args.incident: svc.verify_audit(_incident(svc, args.incident))}
                if args.incident else svc.audit.verify_all())
     ok = True
@@ -238,7 +352,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify", help="verify audit hash chains and evidence integrity")
     v.add_argument("--incident", default=None)
+    v.add_argument("--anchor", default=None,
+                   help="also verify the database against this signed anchor file (Phase 7)")
+    v.add_argument("--key-file", default=None,
+                   help=f"anchor key file (default: ${KEY_FILE_ENV})")
     v.set_defaults(fn=_cmd_verify)
+
+    k = sub.add_parser("anchor-keygen", help="create a new external anchor key file")
+    k.add_argument("--out", required=True, help="new key file, outside the repository")
+    k.set_defaults(fn=_cmd_anchor_keygen, standalone=True)
+
+    an = sub.add_parser("anchor", help="write a signed checkpoint of every audit chain head")
+    an.add_argument("--out", required=True, help="new anchor file (never overwritten)")
+    an.add_argument("--key-file", default=None,
+                    help=f"anchor key file (default: ${KEY_FILE_ENV})")
+    an.set_defaults(fn=_cmd_anchor, standalone=True)
 
     s = sub.add_parser("show", help="summarise an incident")
     s.add_argument("--incident", required=True)
@@ -248,6 +376,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "standalone", False):       # Phase 7 key/anchor commands: no Core writes
+        try:
+            return args.fn(args)
+        except (CoreError, ValueError, OSError) as e:
+            print(f"[core] error: {e}", file=sys.stderr)
+            return 2
     svc = CoreService.open(args.db)
     try:
         return args.fn(svc, args)
