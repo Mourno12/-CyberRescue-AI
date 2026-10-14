@@ -47,6 +47,16 @@ agents:
     agent_id: "REPLACE_WITH_FACILITATOR_UUID"
     api_key:  "REPLACE_WITH_FACILITATOR_API_KEY"
 
+# Humans (CyberRescue). The CISO is a Band USER (not an agent) on the PRIMARY
+# account. `handle` replaces the upstream CISO handle in the agents' prompts at
+# load time (all agent handles above do the same); `user_id` is the CISO's Band
+# user id (the `sender_id` on their messages) -- it maps their messages to the
+# Core role `ciso` when transcripts are synchronised/imported. Neither is secret.
+humans:
+  ciso:
+    handle:  "@youraccount"
+    user_id: "REPLACE_WITH_CISO_BAND_USER_ID"
+
 # The incident war room. Create a fresh room per run containing the human (CISO)
 # + Triage and paste its id here (or pass --room / set BAND_ROOM_ID). The
 # injector posts the alert here; Triage recruits the specialists into it.

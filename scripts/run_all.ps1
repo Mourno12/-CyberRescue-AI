@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     The agents log to stdout only, so this script owns the redirection: it
-    clears each agent's stale .log, launches the four mains from .venv, and
+    clears each agent's stale .log, launches the four mains from the repo venv
+    (.venv313, else .venv -- see -Python), and
     polls the fresh logs for the "running Band agent loop" line. It will not
     give the green light until every agent has reached its Band loop without
     crashing -- so you never fire into a half-empty room again.
@@ -61,15 +62,26 @@ param(
     # alert), so a stronger model here is cheap and reliably completes the
     # multi-step setup (create one room, add everyone, brief). Pass
     # -TriageModel claude-sonnet-4-6. Sets TRIAGE_MODEL for the Triage process.
-    [string]$TriageModel = ""
+    [string]$TriageModel = "",
+    # CyberRescue: interpreter to launch the agents with. Default resolution is
+    # -Python, then $env:CYBERRESCUE_PYTHON, then .venv313 (the verified env),
+    # then .venv (original WarRoom layout) -- see scripts\Resolve-RepoPython.ps1.
+    [string]$Python = "",
+    # CyberRescue: skip the offline preflight (python -m cyberrescue.live
+    # preflight) that otherwise must pass before anything is launched.
+    [switch]$SkipPreflight,
+    # CyberRescue: by default, if any agent FAILS during startup every agent this
+    # run launched is stopped (no half-started room). Pass to leave them up.
+    [switch]$KeepOnFailure
 )
 
 $ErrorActionPreference = "Stop"
 
 # --- paths ---------------------------------------------------------------
 $Repo    = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Python  = Join-Path $Repo ".venv\Scripts\python.exe"
 $PidFile = Join-Path $Repo ".run_all.pids"
+. (Join-Path $PSScriptRoot "Resolve-RepoPython.ps1")
+$PythonExe = $null   # resolved only when launching (-Stop / -Check never need it)
 
 # name -> module ; order = recruitment order (Triage first, Commander last)
 $Agents = [ordered]@{
@@ -184,8 +196,19 @@ function Invoke-Check {
 
 # --- launch --------------------------------------------------------------
 function Start-All {
-    if (-not (Test-Path $Python)) {
-        throw "venv python not found at $Python -- create it / run from the repo with .venv present."
+    $resolved = Resolve-RepoPython -Repo $Repo -Explicit $Python
+    $script:PythonExe = $resolved.Path
+    Write-Host "[run_all] python: $PythonExe (from $($resolved.Source))" -ForegroundColor Cyan
+
+    # CyberRescue: offline preflight (no network / LLM calls). Launch nothing
+    # unless every check passes -- a missing key or placeholder UUID would
+    # otherwise surface as one crashed agent in a half-started room.
+    if (-not $SkipPreflight) {
+        Write-Host "[run_all] preflight: $PythonExe -m cyberrescue.live preflight" -ForegroundColor Cyan
+        & $PythonExe -m cyberrescue.live preflight
+        if ($LASTEXITCODE -ne 0) {
+            throw "preflight failed (exit $LASTEXITCODE) -- nothing was launched. Fix the FAIL lines above, or pass -SkipPreflight."
+        }
     }
 
     # Per-run Commander model override (e.g. claude-sonnet-4-6 for decisive
@@ -214,7 +237,7 @@ function Start-All {
 
         if ($Headless) {
             $err = "$log.err"
-            $p = Start-Process -FilePath $Python `
+            $p = Start-Process -FilePath $PythonExe `
                 -ArgumentList @("-u", "-m", $module) `
                 -WorkingDirectory $Repo `
                 -WindowStyle Hidden -PassThru `
@@ -225,7 +248,7 @@ function Start-All {
         else {
             # Visible window per agent (the demo's four-framework-logs shot),
             # teeing each agent's output to console AND its .log file.
-            $inner = "& '$Python' -u -m $module 2>&1 | Tee-Object -FilePath '$log'"
+            $inner = "& '$PythonExe' -u -m $module 2>&1 | Tee-Object -FilePath '$log'"
             $p = Start-Process -FilePath "powershell" `
                 -ArgumentList @("-NoExit", "-Command", $inner) `
                 -WorkingDirectory $Repo -PassThru
@@ -258,11 +281,20 @@ while ((Get-Date) -lt $deadline) {
 $ok = Invoke-Check
 if ($ok) {
     Write-Host "[run_all] GREEN LIGHT. Fire the incident with:" -ForegroundColor Green
-    Write-Host "    .venv\Scripts\python.exe -m injector.inject_alert INC-C" -ForegroundColor Green
+    Write-Host "    & '$PythonExe' -m injector.inject_alert INC-C" -ForegroundColor Green
     Write-Host "  (or paste the alert into the room, @-picking Triage)." -ForegroundColor DarkGray
     exit 0
 }
 else {
+    # CyberRescue: safe partial shutdown. A crashed agent means the room would
+    # run with a missing participant, so stop every agent this run launched.
+    $map = Read-Pids
+    $rows = foreach ($name in $Agents.Keys) { Get-AgentStatus $name $map[$name] }
+    $failed = @($rows | Where-Object { $_.State -eq "FAILED" })
+    if ($failed.Count -gt 0 -and -not $KeepOnFailure) {
+        Write-Host "[run_all] $($failed.Count) agent(s) FAILED -- stopping all launched agents (logs kept; -KeepOnFailure to leave them up)." -ForegroundColor Red
+        Stop-All
+    }
     Write-Host "[run_all] Do NOT fire yet -- fix the agents above, or re-check with:" -ForegroundColor Yellow
     Write-Host "    powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1 -Check" -ForegroundColor Yellow
     exit 1

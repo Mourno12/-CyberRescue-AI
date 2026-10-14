@@ -25,7 +25,7 @@ from thenvoi.adapters import LangGraphAdapter
 
 from agents.threat_intel.tools import langchain_tools
 from shared.band_logging import LoggingPreprocessor, attach_sdk_logging
-from shared.config import load_agent
+from shared.config import load_agent, render_prompt
 from shared.logging import get_logger, log_event
 from shared.sdk_patches import apply_sdk_patches
 
@@ -51,7 +51,8 @@ async def main() -> None:
     # only risks truncating the FINDING before the send). Env-overridable.
     max_tokens = int(os.getenv("THREAT_INTEL_MAX_TOKENS", "4096"))
     recursion_limit = int(os.getenv("THREAT_INTEL_RECURSION_LIMIT", "15"))
-    custom_section = PROMPT_PATH.read_text(encoding="utf-8")
+    # CyberRescue: handles in the prompt come from agent_config.yaml at load time.
+    custom_section = render_prompt(PROMPT_PATH)
 
     adapter = LangGraphAdapter(
         llm=ChatOpenAI(model=model, max_tokens=max_tokens),

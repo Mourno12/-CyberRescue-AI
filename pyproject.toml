@@ -28,6 +28,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[tool.pytest.ini_options]
+# Default run = the offline suite only. Live (network) tests live in tests_live/
+# and are run explicitly; they also skip unless CYBERRESCUE_LIVE_TESTS=1.
+testpaths = ["tests"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["shared*", "agents*", "injector*", "exporter*", "cyberrescue*"]

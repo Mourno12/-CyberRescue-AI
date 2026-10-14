@@ -20,7 +20,7 @@ from thenvoi.adapters import LangGraphAdapter
 
 from agents.triage.tools import langchain_tools
 from shared.band_logging import LoggingPreprocessor, attach_sdk_logging
-from shared.config import load_agent
+from shared.config import load_agent, render_prompt
 from shared.logging import get_logger, log_event
 from shared.sdk_patches import apply_sdk_patches
 
@@ -48,7 +48,8 @@ async def main() -> None:
     # cost, so a tight cap only risks truncating recruitment. Env-overridable.
     max_tokens = int(os.getenv("TRIAGE_MAX_TOKENS", "4096"))
     recursion_limit = int(os.getenv("TRIAGE_RECURSION_LIMIT", "25"))
-    custom_section = PROMPT_PATH.read_text(encoding="utf-8")
+    # CyberRescue: handles in the prompt come from agent_config.yaml at load time.
+    custom_section = render_prompt(PROMPT_PATH)
 
     adapter = LangGraphAdapter(
         llm=ChatOpenAI(model=model, max_tokens=max_tokens),

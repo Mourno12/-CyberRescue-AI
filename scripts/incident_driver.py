@@ -30,7 +30,13 @@ from dataclasses import dataclass
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from shared.config import load_agent  # noqa: E402
+from shared.config import (  # noqa: E402
+    ciso_user_id,
+    handles_from_config,
+    load_agent,
+    read_agent_config,
+    render_handles,
+)
 
 DEFAULT_BASE_URL = "https://app.band.ai"
 SPECIALIST_ROLES = ("threat_intel", "compliance")  # who owes a FINDING in INC-C
@@ -241,16 +247,22 @@ def _discover_room(client, explicit: str | None):
     return rooms[0].id  # most recently active room the Facilitator is in
 
 
-def _human_mention(client, room_id):
+def _human_mention(client, room_id, ciso_handle: str = "", ciso_id: str | None = None):
     """Resolve the human (CISO) from the room PARTICIPANTS (not the transcript —
-    the human posts the alert in the intake room, so it may not appear here)."""
+    the human posts the alert in the intake room, so it may not appear here).
+
+    CyberRescue: when agent_config.yaml names the CISO (``humans.ciso``), only
+    that user is mentioned; the handle fallback is the configured one."""
     try:
         resp = client.agent_api_participants.list_agent_chat_participants(chat_id=room_id)
         for p in resp.data:
-            if getattr(p, "type", "") == "User":
-                return {"id": p.id,
-                        "handle": (getattr(p, "handle", None) or "merolavtech").lstrip("@"),
-                        "name": getattr(p, "name", None) or "CISO"}
+            if getattr(p, "type", "") != "User":
+                continue
+            if ciso_id and p.id != ciso_id:
+                continue
+            return {"id": p.id,
+                    "handle": (getattr(p, "handle", None) or ciso_handle).lstrip("@"),
+                    "name": getattr(p, "name", None) or "CISO"}
     except Exception:
         pass
     return None
@@ -283,6 +295,15 @@ def main(argv: list[str] | None = None) -> int:
               "to agent_config.yaml (see agent_config.yaml.example).", file=sys.stderr)
         return 2
 
+    # CyberRescue: nudge texts name upstream handles; render the configured ones.
+    try:
+        cfg = read_agent_config(None)
+        handles = handles_from_config(cfg)
+    except Exception as e:
+        print(f"[driver] {e}", file=sys.stderr)
+        return 2
+    ciso_id = ciso_user_id(cfg)
+
     client = RestClient(api_key=fac.api_key, base_url=DEFAULT_BASE_URL)
     roster = _roster()
 
@@ -301,11 +322,12 @@ def main(argv: list[str] | None = None) -> int:
     def post(text: str, mentions: list[dict]) -> None:
         items = [ChatMessageRequestMentionsItem(id=m["id"], handle=m["handle"],
                                                 name=m["name"]) for m in mentions]
-        handles = " ".join(f"@{m['handle']}" for m in mentions)
+        tags = " ".join(f"@{m['handle']}" for m in mentions)
         client.agent_api_messages.create_agent_chat_message(
             chat_id=room,
-            message=ChatMessageRequest(content=f"{handles} [Facilitator] {text}",
-                                       mentions=items))
+            message=ChatMessageRequest(
+                content=f"{tags} [Facilitator] {render_handles(text, handles)}",
+                mentions=items))
 
     last_seen_count = 0
     quiet_since = time.time()
@@ -355,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             ask = nudge.ask
 
         if target == "human":
-            hm = _human_mention(client, room)
+            hm = _human_mention(client, room, handles["ciso"], ciso_id)
             mentions = [hm] if hm else []
         else:
             r = roster.get(target)

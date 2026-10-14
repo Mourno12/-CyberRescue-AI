@@ -1,3 +1,27 @@
+# CyberRescue-AI (built on WarRoom)
+
+This branch (`cyberrescue-ai`) extends the upstream WarRoom project below with
+**CyberRescue Core**. The Core is a deterministic, audited system of record: an
+evidence store, detection, investigation, response planning, a policy engine
+that gates the Commander's actions, SIMULATED execution, and tamper-evident
+audit anchoring. The four-agent design and everything under "WarRoom" below come
+from upstream ([attribution](docs/ca3/11-contribution-attribution.md)).
+
+| | Command (PowerShell, verified environment `.venv313`) |
+|---|---|
+| Offline evaluation | `.\.venv313\Scripts\python.exe -m cyberrescue.evaluation run --scenario A --investigation --response --execution --accountability` |
+| Offline stepwise demo | `powershell -ExecutionPolicy Bypass -File scripts\demo_offline.ps1 -Pause` |
+| Live readiness (no network) | `.\.venv313\Scripts\python.exe -m cyberrescue.live preflight` |
+| Offline tests | `.\.venv313\Scripts\python.exe -m pytest -q -p no:cacheprovider` |
+
+The offline pipeline is verified. **Live four-agent collaboration has not been
+verified on this branch**; see the [CA3 package](docs/ca3/README.md),
+specifically the [live runbook](docs/ca3/07-live-demo-runbook.md) and the
+[limitations](docs/ca3/09-limitations-security.md). Phase design documents are
+in [`docs/cyberrescue/`](docs/cyberrescue/).
+
+---
+
 # WarRoom
 
 **Multi-agent cybersecurity incident response, coordinated through Band.**
@@ -95,8 +119,11 @@ demo/          video narration script + presentation text
 ## Tests
 
 ```powershell
-.venv\Scripts\python.exe -m pytest tests/ -q     # 77 passing
+.venv\Scripts\python.exe -m pytest tests/ -q     # 77 passing (upstream baseline)
 ```
+
+On the `cyberrescue-ai` branch the offline suite is far larger; current results
+are in [docs/ca3/08-test-verification-report.md](docs/ca3/08-test-verification-report.md).
 
 ## Notes & known limits
 

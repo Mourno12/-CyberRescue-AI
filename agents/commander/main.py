@@ -18,7 +18,7 @@ from thenvoi.adapters import AnthropicAdapter
 
 from agents.commander.tools import anthropic_tools
 from shared.band_logging import LoggingPreprocessor, attach_sdk_logging
-from shared.config import load_agent
+from shared.config import load_agent, render_prompt
 from shared.logging import get_logger, log_event
 from shared.sdk_patches import apply_sdk_patches
 
@@ -43,7 +43,8 @@ async def main() -> None:
     # Commander's messages (SIGNOFF_REQUEST / ESCALATION / ACTION / RESOLUTION +
     # tool calls) are short; 1536 leaves headroom without truncating tool_use.
     max_tokens = int(os.getenv("COMMANDER_MAX_TOKENS", "1536"))
-    custom_section = PROMPT_PATH.read_text(encoding="utf-8")
+    # CyberRescue: handles in the prompt come from agent_config.yaml at load time.
+    custom_section = render_prompt(PROMPT_PATH)
 
     # NOTE: band-sdk 0.2.11's AnthropicAdapter has NO `client` kwarg — it
     # builds its own Anthropic client from ANTHROPIC_API_KEY (loaded from

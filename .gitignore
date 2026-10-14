@@ -26,3 +26,7 @@ cyberrescue*.db-wal
 cyberrescue*.db-shm
 # CyberRescue Commander-gate decision log (shadow/enforce)
 cyberrescue_gate_log.jsonl
+# CyberRescue live sync runtime artifacts. `python -m cyberrescue.live sync` refuses
+# to write inside the repository; these patterns guard against manual copies.
+live_sync_*.jsonl
+*.live-sync.lock

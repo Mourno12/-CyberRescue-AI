@@ -25,7 +25,7 @@ from thenvoi.adapters import PydanticAIAdapter
 
 from agents.compliance.tools import pydantic_ai_tools
 from shared.band_logging import LoggingPreprocessor, attach_sdk_logging
-from shared.config import load_agent
+from shared.config import load_agent, render_prompt
 from shared.logging import get_logger, log_event
 from shared.sdk_patches import apply_sdk_patches
 
@@ -46,7 +46,8 @@ async def main() -> None:
     # Pydantic AI model string. AIML is OpenAI-compatible, so "openai:<model>"
     # + OPENAI_BASE_URL (set in .env.local) routes through AIML.
     model = os.getenv("COMPLIANCE_MODEL", "openai:gpt-4o")
-    custom_section = PROMPT_PATH.read_text(encoding="utf-8")
+    # CyberRescue: handles in the prompt come from agent_config.yaml at load time.
+    custom_section = render_prompt(PROMPT_PATH)
 
     adapter = PydanticAIAdapter(
         model=model,

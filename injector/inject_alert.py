@@ -61,6 +61,11 @@ def _post_via_rest(content: str, triage, api_key: str, base_url: str) -> str:
     Returns the intake room ID (for reference only; the demo doesn't need it).
     Uses the Band SDK's RestClient for proper request serialization.
     """
+    # CyberRescue: the handle comes from agent_config.yaml only (no upstream fallback).
+    if not triage.handle:
+        raise ValueError("agents.triage.handle is not set in agent_config.yaml")
+    handle = triage.handle.lstrip("@")
+
     from thenvoi_rest import RestClient
     from thenvoi_rest.human_api_chats.types import (
         CreateMyChatRoomRequestChat,
@@ -81,7 +86,6 @@ def _post_via_rest(content: str, triage, api_key: str, base_url: str) -> str:
     )
 
     # Post alert @mentioning Triage
-    handle = (triage.handle or "@merolavtech/triage").lstrip("@")
     msg_req = ChatMessageRequest(
         content=content,
         mentions=[{"id": triage.agent_id, "handle": handle, "name": "triage"}],
